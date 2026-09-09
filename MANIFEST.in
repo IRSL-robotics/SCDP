@@ -1,0 +1,6 @@
+include NOTICE
+include uv.lock
+recursive-include configs *.json
+recursive-include scripts *.py
+include src/lerobot/templates/lerobot_modelcard_template.md
+include src/lerobot/datasets/card_template.md

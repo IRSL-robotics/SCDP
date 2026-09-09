@@ -1,0 +1,10 @@
+SCDP is distributed as a focused fork of LeRobot 0.4.1.
+
+LeRobot
+Copyright 2024 The Hugging Face Inc. team
+https://github.com/huggingface/lerobot
+
+The LeRobot-derived source under src/lerobot and this distribution are provided
+under the Apache License 2.0. The SCDP experiment code was extracted from
+IRSL-robotics/policy_learning at commit 1edfb23 together with the local
+Meta-World and real-world experiment changes present on 2026-09-09.
