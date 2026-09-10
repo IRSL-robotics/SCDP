@@ -24,6 +24,10 @@
 Official implementation of SCDP, with Meta-World benchmarks and real-world training
 and inference. Built on [LeRobot](https://github.com/huggingface/lerobot) 0.4.1.
 
+<p align="center">
+  <img src="assets/SCDP.gif" alt="SCDP demonstration" width="720">
+</p>
+
 ## Setup
 
 Linux, Python 3.10, and a CUDA GPU are recommended. Install
@@ -121,7 +125,7 @@ use `--summarize-only` to aggregate existing metrics without training.
 **Dashboard:** Run `python3 scripts/benchmark_dashboard.py` in a separate terminal
 and open <http://127.0.0.1:8080> to monitor progress and results.
 
-## Real world
+## Real-World
 
 Use a local LeRobot v3 dataset with fixed-camera RGB images
 (`observation.images.cam_3`), robot state (`observation.state`, first 3 values: XYZ),
