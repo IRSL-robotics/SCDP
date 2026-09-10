@@ -438,7 +438,7 @@ def run_training(args, policy_kind: str) -> None:
                     if wandb_run is not None:
                         wandb_run.log(record)
 
-                if epoch % args.eval_freq == 0 and batch_index == 0:
+                if epoch > 0 and epoch % args.eval_freq == 0 and batch_index == 0:
                     stop_early = evaluate_checkpoint(epoch, global_step + 1)
                     if stop_early:
                         break

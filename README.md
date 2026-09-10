@@ -31,7 +31,6 @@ export MUJOCO_GL=egl
 | Meta-World | SCDP | `scripts/metaworld_ours_dp_train.py` | `scripts/metaworld_ours_dp_eval.py` |
 | Meta-World | Diffusion Policy | `scripts/metaworld_dp_train.py` | `scripts/metaworld_dp_eval.py` |
 | Real world | SCDP | `scripts/real_ours_dp_train.py` | `scripts/real_policy_inference.py --policy scdp` |
-| Real world | Diffusion Policy | `scripts/real_dp_train.py` | `scripts/real_policy_inference.py --policy dp` |
 
 ## Meta-World
 
@@ -88,7 +87,7 @@ checkpoints and metrics under `outputs/<task>/{dp,scdp}/seed_<seed>`.
 | LR scheduler | None |
 | Noise scheduler / inference steps | DDIM / 16 |
 | SCDP sample step | 8 |
-| Epoch indices / evaluation interval | `0-1000` / 100 |
+| Epoch indices / evaluation epochs | `0-1000` / `100, 200, ..., 1000` |
 
 ### Reported result
 
@@ -153,13 +152,9 @@ projector = PinholeCameraProjector(load_camera_calibration("camera.json"))
 grid_xy = projector(points_world)  # [..., 3] world XYZ -> [..., 2] grid_sample coordinates
 ```
 
-Train both policies:
+Train SCDP:
 
 ```bash
-uv run python scripts/real_dp_train.py \
-  --dataset-dir /path/to/task/lerobot \
-  --output-dir outputs/real/dp
-
 uv run python scripts/real_ours_dp_train.py \
   --dataset-dir /path/to/task/lerobot \
   --camera-calibration configs/real_camera.example.json \
@@ -183,40 +178,6 @@ boundary. The runner returns dataset-unit actions and does not command hardware;
 workspace limits, collision checks, watchdogs, and emergency-stop handling remain the
 responsibility of the robot integration.
 
-## Inference speed
-
-Inference reconstructs the recurrent 3-D trajectory once and projects every point with
-one batched matrix operation per denoising step. DDIM coefficients and geometry stay
-cached on the device. The default `reduce-overhead` path compiles the image encoder and
-captures all 16 trajectory-projection, feature-sampling, U-Net, and DDIM-update steps
-in one fixed-shape CUDA Graph. Meta-World and real-world policies share this path.
-
-The Meta-World evaluation script and `RealPolicyRunner` enable it by default. Direct
-policy users can call `policy.eval()` followed by `policy.optimize_for_inference()`.
-
-Measured on an NVIDIA GeForce RTX 5090 with PyTorch 2.9.1, batch size 1, 16 DDIM
-steps, and 10 warm-up / 50 timed calls:
-
-| Target | Before p50 | Optimized p50 | Speedup | Reduction | Max abs. difference |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Meta-World SCDP | 69.113 ms | 13.886 ms | 4.977x | 79.9% | 0.001154 |
-| Real SCDP | 68.143 ms | 13.819 ms | 4.931x | 79.7% | 0.000775 |
-
-```bash
-uv run python scripts/benchmark_inference.py \
-  --target both \
-  --warmup 10 \
-  --iterations 50
-```
-
-The optimized call amortizes to 1.736 ms per Meta-World action and 1.727 ms per
-real-world action because each call produces an eight-action chunk. The first request
-compiles each fixed input shape and may take one to two minutes, so initialize
-`RealPolicyRunner` once and keep the robot process alive. Use `--compile-mode default`
-if CUDA Graph capture is unavailable, or `--no-compile-inference` to disable
-compilation. Reducing DDIM steps changes policy behavior and should be validated per
-task.
-
 ## Notes
 
 - New checkpoints include normalization statistics; real-world SCDP checkpoints also
@@ -238,7 +199,7 @@ uv run pytest
 uv build
 ```
 
-Full training, evaluation, and speed benchmarks require suitable data and a CUDA GPU.
+Full training and evaluation require suitable data and a CUDA GPU.
 
 ## License
 

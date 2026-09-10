@@ -33,4 +33,4 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    run_training(parse_args(), policy_kind="scdp")
+    run_training(parse_args())

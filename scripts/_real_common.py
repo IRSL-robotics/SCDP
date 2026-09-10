@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Shared utilities for training and loading real-world DP/SCDP policies."""
+"""Shared utilities for training SCDP and loading real-world DP/SCDP policies."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def load_real_dataset(
     return metadata, input_features, output_features
 
 
-def run_training(args, policy_kind: str) -> None:
+def run_training(args) -> None:
     for name in ("num_epochs", "save_freq", "log_freq", "batch_size", "num_inference_steps"):
         if getattr(args, name) <= 0:
             raise ValueError(f"`{name}` must be positive.")
@@ -117,29 +117,18 @@ def run_training(args, policy_kind: str) -> None:
         "crop_is_random": args.random_crop,
         "down_dims": tuple(args.down_dims),
     }
-    if policy_kind == "scdp":
-        if args.camera_calibration is None:
-            raise ValueError("Real-world SCDP requires --camera-calibration.")
-        calibration = load_camera_calibration(Path(args.camera_calibration).expanduser().resolve())
-        config = OursDiffusionRealConfig(
-            **common_config,
-            **calibration.as_policy_config(),
-            use_separate_rgb_encoder_per_camera=False,
-            sample_step=args.sample_step,
-            action_min=_action_bound(metadata.stats, "min"),
-            action_max=_action_bound(metadata.stats, "max"),
-        )
-        policy = OursDiffusionRealPolicy(config)
-        uses_raw_state = True
-    elif policy_kind == "dp":
-        config = DiffusionConfig(
-            **common_config,
-            use_separate_rgb_encoder_per_camera=True,
-        )
-        policy = DiffusionPolicy(config)
-        uses_raw_state = False
-    else:
-        raise ValueError(f"Unknown policy kind: {policy_kind}")
+    if args.camera_calibration is None:
+        raise ValueError("Real-world SCDP requires --camera-calibration.")
+    calibration = load_camera_calibration(Path(args.camera_calibration).expanduser().resolve())
+    config = OursDiffusionRealConfig(
+        **common_config,
+        **calibration.as_policy_config(),
+        use_separate_rgb_encoder_per_camera=False,
+        sample_step=args.sample_step,
+        action_min=_action_bound(metadata.stats, "min"),
+        action_max=_action_bound(metadata.stats, "max"),
+    )
+    policy = OursDiffusionRealPolicy(config)
 
     policy.to(device)
     policy.train()
@@ -171,7 +160,7 @@ def run_training(args, policy_kind: str) -> None:
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
         if args.output_dir
-        else Path("outputs") / "real" / policy_kind
+        else Path("outputs") / "real" / "scdp"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.jsonl"
@@ -184,7 +173,7 @@ def run_training(args, policy_kind: str) -> None:
 
         wandb_run = wandb.init(
             project=args.wandb_project,
-            name=f"real-{policy_kind}-seed{args.seed}",
+            name=f"real-scdp-seed{args.seed}",
             dir=output_dir,
             config=vars(args),
         )
@@ -195,15 +184,13 @@ def run_training(args, policy_kind: str) -> None:
         for epoch in range(args.num_epochs):
             progress = tqdm(dataloader, desc=f"epoch {epoch:04d}", unit="batch", leave=False)
             for batch in progress:
-                raw_states = None
-                if uses_raw_state:
-                    raw_states = batch["observation.state"][:, :, :3].to(
-                        device=device,
-                        dtype=torch.float32,
-                        non_blocking=True,
-                    )
+                raw_states = batch["observation.state"][:, :, :3].to(
+                    device=device,
+                    dtype=torch.float32,
+                    non_blocking=True,
+                )
                 batch = preprocessor(batch)
-                loss, _ = policy.forward(batch, raw_states) if uses_raw_state else policy.forward(batch)
+                loss, _ = policy.forward(batch, raw_states)
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
