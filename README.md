@@ -89,13 +89,20 @@ checkpoints and metrics under `outputs/<task>/{dp,scdp}/seed_<seed>`.
 | SCDP sample step | 8 |
 | Epoch indices / evaluation epochs | `0-1000` / `100, 200, ..., 1000` |
 
-### Reported result
+### Full benchmark
 
-| Task | SCDP success rate |
-| --- | ---: |
-| Assembly-v3 | `91.7 ± 2.9%` |
+Run all 50 tasks with seeds `0,1,2`. Add `--collect-missing` the first time if
+the 20-demo datasets are not present:
 
-This is the three-seed mean and sample standard deviation of the best evaluated checkpoint.
+```bash
+bash scripts/run_metaworld_benchmark.sh --policy scdp --collect-missing
+```
+
+Use `--policy both` to include the Diffusion Policy baseline, or
+`--tasks assembly,push` for a subset. The script prints the best-checkpoint
+three-seed mean and sample standard deviation, then writes `summary.csv` and
+`summary.json` under `outputs/metaworld_benchmark`. Completed runs are skipped;
+use `--summarize-only` to aggregate existing metrics without training.
 
 ## Real world
 
