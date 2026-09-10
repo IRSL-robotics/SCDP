@@ -14,8 +14,12 @@ import torch
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.ours_diffusion.configuration_diffusion import OursDiffusionConfig
 from lerobot.policies.ours_diffusion.modeling_diffusion import OursDiffusionPolicy
-from lerobot.policies.ours_diffusion_real.configuration_diffusion import OursDiffusionRealConfig
-from lerobot.policies.ours_diffusion_real.modeling_diffusion import OursDiffusionRealPolicy
+from lerobot.policies.ours_diffusion_real.configuration_diffusion import (
+    OursDiffusionRealConfig,
+)
+from lerobot.policies.ours_diffusion_real.modeling_diffusion import (
+    OursDiffusionRealPolicy,
+)
 from lerobot.policies.utils import get_device_from_parameters, get_dtype_from_parameters
 from lerobot.utils.constants import OBS_IMAGES, OBS_STATE
 
@@ -31,16 +35,20 @@ def legacy_projection(model, raw_states, target):
         fx = fy * (width / height)
         cx, cy = width / 2, height / 2
         camera_states = (raw_states - camera_position) @ camera_rotation
-        u = (fx * (camera_states[:, :, 0] / camera_states[:, :, 2]) + cx).unsqueeze(-1)
-        v = (fy * (camera_states[:, :, 1] / -camera_states[:, :, 2]) + cy).unsqueeze(-1)
+        inverse_z = camera_states[:, :, 2].reciprocal()
+        u = (fx * camera_states[:, :, 0] * inverse_z + cx).unsqueeze(-1)
+        v = (fy * camera_states[:, :, 1] * -inverse_z + cy).unsqueeze(-1)
     else:
-        camera_position = model.camera_world_position.to(device=device)
-        camera_rotation = model.camera_world_rotation.to(device=device)
-        fx, fy, cx, cy = model.projection_intrinsics.to(device=device)
-        height, width = model.projection_image_size
+        camera = model.camera_geometry
+        camera_position = camera.camera_position_world.to(device=device)
+        camera_rotation = camera.camera_axes_world.to(device=device)
+        intrinsic = camera.intrinsics.to(device=device)
+        height, width = camera.image_size
         camera_states = (raw_states - camera_position) @ camera_rotation
-        u = (fx * (camera_states[:, :, 0] / camera_states[:, :, 2]) + cx).unsqueeze(-1)
-        v = (fy * (camera_states[:, :, 1] / camera_states[:, :, 2]) + cy).unsqueeze(-1)
+        x = camera_states[:, :, 0] / camera_states[:, :, 2]
+        y = camera_states[:, :, 1] / camera_states[:, :, 2]
+        u = (intrinsic[0, 0] * x + intrinsic[0, 1] * y + intrinsic[0, 2]).unsqueeze(-1)
+        v = (intrinsic[1, 0] * x + intrinsic[1, 1] * y + intrinsic[1, 2]).unsqueeze(-1)
 
     projected = torch.cat([u, v], dim=-1)
     projected[:, :, 0] = 2 * (projected[:, :, 0] / width) - 1
@@ -72,10 +80,14 @@ def legacy_conditional_sample(model, batch, raw_states, noise, target):
     batch_size, n_obs_steps = batch[OBS_STATE].shape[:2]
     state_cond = model._prepare_state_conditioning(batch)
     image_feature_maps = model._prepare_image_feature_maps(batch)
-    sample = noise if noise is not None else torch.randn(
-        (batch_size, model.config.horizon, model.config.action_feature.shape[0]),
-        dtype=dtype,
-        device=device,
+    sample = (
+        noise
+        if noise is not None
+        else torch.randn(
+            (batch_size, model.config.horizon, model.config.action_feature.shape[0]),
+            dtype=dtype,
+            device=device,
+        )
     )
 
     model.noise_scheduler.set_timesteps(model.num_inference_steps)
@@ -186,7 +198,11 @@ def make_case(target: str, args):
             action_min=(-0.05, -0.05, -0.05),
             action_max=(0.05, 0.05, 0.05),
             camera_image_size=(height, width),
-            camera_intrinsics=((width, 0.0, width / 2), (0.0, height, height / 2), (0.0, 0.0, 1.0)),
+            camera_intrinsics=(
+                (width, 0.0, width / 2),
+                (0.0, height, height / 2),
+                (0.0, 0.0, 1.0),
+            ),
             camera_world_position=(0.0, 0.0, 0.0),
             camera_world_rotation=((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
         )
@@ -231,6 +247,12 @@ def run_case(target: str, args) -> dict:
         return legacy_conditional_sample(model, batch, raw_states, noise, target)
 
     reference_output = reference()
+    eager_output = optimized()
+    torch.cuda.synchronize()
+    eager_max_absolute_error = (reference_output - eager_output).abs().max().item()
+
+    if args.compile:
+        model.enable_inference_optimizations(mode=args.compile_mode)
     optimized_output = optimized()
     torch.cuda.synchronize()
     max_absolute_error = (reference_output - optimized_output).abs().max().item()
@@ -251,8 +273,11 @@ def run_case(target: str, args) -> dict:
         "action_steps": model.config.n_action_steps,
         "sample_step": model.config.sample_step,
         "denoising_steps": model.num_inference_steps,
+        "compiled": args.compile,
+        "compile_mode": args.compile_mode if args.compile else None,
         "warmup": args.warmup,
         "iterations": args.iterations,
+        "eager_vectorized_max_absolute_error": eager_max_absolute_error,
         "max_absolute_error": max_absolute_error,
         "legacy": reference_stats,
         "optimized": optimized_stats,
@@ -264,9 +289,22 @@ def run_case(target: str, args) -> dict:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Benchmark the compiled fused DDIM path (default: enabled).",
+    )
+    parser.add_argument("--compile-mode", default="reduce-overhead", help="torch.compile mode.")
     parser.add_argument("--target", choices=("metaworld", "real", "both"), default="both")
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--image-size", type=int, nargs=2, default=[224, 224], metavar=("HEIGHT", "WIDTH"))
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=[224, 224],
+        metavar=("HEIGHT", "WIDTH"),
+    )
     parser.add_argument("--num-inference-steps", type=int, default=16)
     parser.add_argument("--sample-step", type=int, default=8)
     parser.add_argument("--down-dims", type=int, nargs="+", default=[128, 256, 384])
@@ -281,7 +319,13 @@ def main() -> None:
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("This benchmark requires CUDA for synchronized GPU timings.")
-    for name in ("batch_size", "num_inference_steps", "sample_step", "warmup", "iterations"):
+    for name in (
+        "batch_size",
+        "num_inference_steps",
+        "sample_step",
+        "warmup",
+        "iterations",
+    ):
         if getattr(args, name) <= 0:
             raise ValueError(f"`{name}` must be positive.")
 

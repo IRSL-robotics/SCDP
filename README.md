@@ -1,6 +1,7 @@
 # SCDP
 
-Official implementation of **SCDP**, accepted at **CoRL 2026**.
+Official implementation of **Spatially Conditioned Diffusion Policy (SCDP)**,
+accepted at **CoRL 2026**.
 
 This repository is a focused fork of [LeRobot](https://github.com/huggingface/lerobot)
 0.4.1. It provides SCDP and Diffusion Policy baselines for Meta-World, together with
@@ -12,7 +13,7 @@ Linux, Python 3.10, and a CUDA GPU are recommended. Install
 [uv](https://docs.astral.sh/uv/), then run:
 
 ```bash
-git clone <YOUR_REPOSITORY_URL> SCDP
+git clone https://github.com/IRSL-robotics/SCDP.git
 cd SCDP
 uv sync --locked
 ```
@@ -83,10 +84,19 @@ checkpoints and metrics under `outputs/<task>/{dp,scdp}/seed_<seed>`.
 | Image / camera | `224 x 224`, `corner2` |
 | Observation steps / horizon / action steps | `2 / 16 / 8` |
 | Batch size | 128 |
-| Optimizer | Adam, `1e-4` |
-| Scheduler / inference steps | DDIM / 16 |
+| Optimizer | Adam, `1e-4`, betas `(0.9, 0.999)` |
+| LR scheduler | None |
+| Noise scheduler / inference steps | DDIM / 16 |
 | SCDP sample step | 8 |
-| Epochs / evaluation interval | 1001 / 200 |
+| Epoch indices / evaluation interval | `0-1000` / 100 |
+
+### Reported result
+
+| Task | SCDP success rate |
+| --- | ---: |
+| Assembly-v3 | `91.7 ± 2.9%` |
+
+This is the three-seed mean and sample standard deviation of the best evaluated checkpoint.
 
 ## Real world
 
@@ -100,7 +110,32 @@ not included.
 | `action` | action vector; first 3 values are XYZ deltas |
 
 SCDP requires at least three state/action dimensions and a calibrated fixed camera.
-Validate the dataset and calibration before training:
+Calibration parsing and projection are isolated in
+`src/lerobot/policies/ours_diffusion_real/camera_geometry.py`. New calibration JSON
+files should use this column-vector pinhole convention:
+
+```text
+p_camera_h = T_camera_from_world @ p_world_h
+scale * [u, v, 1]^T = K @ [x_camera, y_camera, z_camera]^T
+```
+
+Here, `p_world_h = [X, Y, Z, 1]^T`, `p_camera_h` is homogeneous camera space,
+and `(u, v)` is a pixel coordinate.
+
+| JSON field | Required convention |
+| --- | --- |
+| `camera_image_size` | `[height, width]` of the stored image |
+| `camera_intrinsics` | Pixel-space `K`, 3x3 with bottom row `[0, 0, 1]` |
+| `world_to_camera_matrix` | `T_camera_from_world`, rigid 4x4; rotation orthonormal (det +1), bottom row `[0, 0, 0, 1]` |
+
+The camera frame uses `+x` right, `+y` down, and `+z` forward; projected points must
+have positive camera-space `z`. The first three state values, the first three action
+deltas, and the transform translation must share one world frame and length unit.
+Images must be undistorted, and `K` must match their exact stored resolution. Center
+crop is supported; random crop is not.
+
+Replace the values in `configs/real_camera.example.json`, then validate the dataset
+and calibration before training:
 
 ```bash
 uv run python scripts/validate_real_dataset.py \
@@ -109,9 +144,14 @@ uv run python scripts/validate_real_dataset.py \
   --decode-frame
 ```
 
-`configs/real_camera.example.json` documents the required intrinsics, camera pose, and
-image size. Replace its values with your calibration. Intrinsics must match the stored
-image resolution; random crop is unsupported because it invalidates the projection.
+The loader and projector can also be used directly in a robot integration:
+
+```python
+from lerobot.policies.ours_diffusion_real.camera_geometry import PinholeCameraProjector, load_camera_calibration
+
+projector = PinholeCameraProjector(load_camera_calibration("camera.json"))
+grid_xy = projector(points_world)  # [..., 3] world XYZ -> [..., 2] grid_sample coordinates
+```
 
 Train both policies:
 
@@ -145,17 +185,22 @@ responsibility of the robot integration.
 
 ## Inference speed
 
-Inference caches diffusion timesteps, keeps geometry as device buffers, and avoids
-redundant allocations and transfers. The real-world policy uses the same optimized
-path.
+Inference reconstructs the recurrent 3-D trajectory once and projects every point with
+one batched matrix operation per denoising step. DDIM coefficients and geometry stay
+cached on the device. The default `reduce-overhead` path compiles the image encoder and
+captures all 16 trajectory-projection, feature-sampling, U-Net, and DDIM-update steps
+in one fixed-shape CUDA Graph. Meta-World and real-world policies share this path.
+
+The Meta-World evaluation script and `RealPolicyRunner` enable it by default. Direct
+policy users can call `policy.eval()` followed by `policy.optimize_for_inference()`.
 
 Measured on an NVIDIA GeForce RTX 5090 with PyTorch 2.9.1, batch size 1, 16 DDIM
 steps, and 10 warm-up / 50 timed calls:
 
-| Target | Before p50 / p95 | Optimized p50 / p95 | p50 speedup | Max error |
-| --- | ---: | ---: | ---: | ---: |
-| Meta-World SCDP | 68.770 / 71.955 ms | 65.585 / 68.076 ms | 1.049x | 0.0 |
-| Real SCDP | 66.127 / 69.139 ms | 64.182 / 67.548 ms | 1.030x | 0.0 |
+| Target | Before p50 | Optimized p50 | Speedup | Reduction | Max abs. difference |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Meta-World SCDP | 69.113 ms | 13.886 ms | 4.977x | 79.9% | 0.001154 |
+| Real SCDP | 68.143 ms | 13.819 ms | 4.931x | 79.7% | 0.000775 |
 
 ```bash
 uv run python scripts/benchmark_inference.py \
@@ -164,9 +209,13 @@ uv run python scripts/benchmark_inference.py \
   --iterations 50
 ```
 
-The measured gain is about 3–5%. Each diffusion call produces eight cached actions,
-so later control steps reuse the generated chunk. Reducing DDIM steps has a larger
-latency impact, but changes policy behavior and should be validated per task.
+The optimized call amortizes to 1.736 ms per Meta-World action and 1.727 ms per
+real-world action because each call produces an eight-action chunk. The first request
+compiles each fixed input shape and may take one to two minutes, so initialize
+`RealPolicyRunner` once and keep the robot process alive. Use `--compile-mode default`
+if CUDA Graph capture is unavailable, or `--no-compile-inference` to disable
+compilation. Reducing DDIM steps changes policy behavior and should be validated per
+task.
 
 ## Notes
 
@@ -175,6 +224,9 @@ latency impact, but changes policy behavior and should be validated per task.
 - For legacy checkpoints that reference `dataset_stats_path`, pass `--dataset-dir` at
   evaluation or inference time.
 - Meta-World projection assumes the original `corner2` camera geometry.
+- CUDA `grid_sample` backward and diffusion action sampling are stochastic. Compare
+  three-seed best-checkpoint aggregates; checkpoint curves and fresh-process rollout
+  estimates need not be bitwise identical.
 - Datasets, checkpoints, and videos are excluded by `.gitignore`.
 
 ## Validation

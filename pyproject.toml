@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lerobot-scdp"
 version = "0.1.0"
-description = "Reproducible SCDP and Diffusion Policy for Meta-World and real-world data"
+description = "Official SCDP implementation for Meta-World and real-world experiments"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 license = "Apache-2.0"

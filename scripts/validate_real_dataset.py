@@ -44,7 +44,7 @@ def main() -> None:
     }
     if args.camera_calibration:
         calibration = load_camera_calibration(args.camera_calibration.expanduser().resolve())
-        calibrated_size = tuple(calibration["camera_image_size"])
+        calibrated_size = calibration.image_size
         dataset_size = image_shape[-2:]
         if calibrated_size != dataset_size:
             raise ValueError(

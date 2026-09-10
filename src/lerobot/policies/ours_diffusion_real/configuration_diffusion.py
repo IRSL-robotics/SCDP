@@ -19,6 +19,9 @@ from dataclasses import dataclass
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.ours_diffusion.configuration_diffusion import OursDiffusionConfig
+from lerobot.policies.ours_diffusion_real.camera_geometry import (
+    PinholeCameraCalibration,
+)
 
 
 @PreTrainedConfig.register_subclass("ours_diffusion_real")
@@ -26,9 +29,10 @@ from lerobot.policies.ours_diffusion.configuration_diffusion import OursDiffusio
 class OursDiffusionRealConfig(OursDiffusionConfig):
     """SCDP configuration for a calibrated fixed real-world RGB camera.
 
-    Intrinsics must already be expressed in pixels of ``camera_image_size``.
-    ``camera_world_rotation`` follows the original experiment convention:
-    ``point_camera = (point_world - camera_world_position) @ camera_world_rotation``.
+    Intrinsics are expressed in pixels of camera_image_size. These fields retain
+    the legacy row-vector checkpoint representation. New calibration JSON files
+    should use the standard world_to_camera_matrix format documented in
+    camera_geometry.py and configs/real_camera.example.json.
     """
 
     camera_image_size: tuple[int, int] = (240, 320)
@@ -48,15 +52,15 @@ class OursDiffusionRealConfig(OursDiffusionConfig):
     def __post_init__(self):
         super().__post_init__()
         if len(self.camera_image_size) != 2 or any(value <= 0 for value in self.camera_image_size):
-            raise ValueError(f"`camera_image_size` must be positive (height, width), got {self.camera_image_size}.")
-        if len(self.camera_intrinsics) != 3 or any(len(row) != 3 for row in self.camera_intrinsics):
-            raise ValueError("`camera_intrinsics` must be a 3x3 matrix.")
-        if len(self.camera_world_position) != 3:
-            raise ValueError("`camera_world_position` must contain three values.")
-        if len(self.camera_world_rotation) != 3 or any(
-            len(row) != 3 for row in self.camera_world_rotation
-        ):
-            raise ValueError("`camera_world_rotation` must be a 3x3 matrix.")
+            raise ValueError(
+                f"`camera_image_size` must be positive (height, width), got {self.camera_image_size}."
+            )
+        PinholeCameraCalibration.from_policy_config(
+            camera_image_size=self.camera_image_size,
+            camera_intrinsics=self.camera_intrinsics,
+            camera_world_position=self.camera_world_position,
+            camera_world_rotation=self.camera_world_rotation,
+        )
         if self.state_embedding_dim <= 0:
             raise ValueError("`state_embedding_dim` must be positive.")
         if self.crop_shape is not None and self.crop_is_random:

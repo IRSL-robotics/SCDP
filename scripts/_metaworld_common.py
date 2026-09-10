@@ -125,10 +125,19 @@ def evaluate_policy(
     seed: int,
     device: torch.device,
     uses_raw_state: bool,
+    seed_mode: str = "increment",
+    compile_inference: bool = False,
+    compile_mode: str = "reduce-overhead",
     video_dir: Path | None = None,
 ) -> float:
     if num_episodes <= 0:
         raise ValueError("`num_episodes` must be positive.")
+    if seed_mode not in {"fixed", "increment"}:
+        raise ValueError(f"Unknown evaluation seed mode: {seed_mode!r}.")
+    if compile_inference:
+        if not uses_raw_state:
+            raise ValueError("Compiled inference is only implemented for SCDP.")
+        policy.optimize_for_inference(mode=compile_mode)
 
     env = make_env(task_name)
     num_successes = 0
@@ -136,7 +145,8 @@ def evaluate_policy(
     try:
         for episode in range(num_episodes):
             policy.reset()
-            observation, _ = env.reset(seed=seed + episode)
+            episode_seed = seed if seed_mode == "fixed" else seed + episode
+            observation, _ = env.reset(seed=episode_seed)
             state_history: deque[torch.Tensor] = deque(maxlen=policy.config.n_obs_steps)
             episode_success = False
             frames = [] if video_dir is not None else None
@@ -166,7 +176,7 @@ def evaluate_policy(
             num_successes += int(episode_success)
             print(
                 f"[eval] episode={episode + 1}/{num_episodes} "
-                f"seed={seed + episode} success={int(episode_success)}"
+                f"seed={episode_seed} success={int(episode_success)}"
             )
 
             if frames is not None:
@@ -212,12 +222,28 @@ def _load_dataset(args):
 
 
 def run_training(args, policy_kind: str) -> None:
-    positive_args = ("num_epochs", "eval_freq", "log_freq", "batch_size", "num_inference_steps")
+    positive_args = (
+        "num_epochs",
+        "eval_freq",
+        "log_freq",
+        "batch_size",
+        "num_inference_steps",
+    )
     for name in positive_args:
         if getattr(args, name) <= 0:
             raise ValueError(f"`{name}` must be positive.")
     if args.num_eval_episodes <= 0:
         raise ValueError("`num_eval_episodes` must be positive.")
+    if args.scheduler_warmup_steps < 0:
+        raise ValueError("scheduler_warmup_steps must be non-negative.")
+    if args.optimizer_eps <= 0:
+        raise ValueError("optimizer_eps must be positive.")
+    if args.weight_decay < 0:
+        raise ValueError("weight_decay must be non-negative.")
+    if args.grad_clip_norm < 0:
+        raise ValueError("grad_clip_norm must be non-negative.")
+    if any(beta < 0 or beta >= 1 for beta in args.optimizer_betas):
+        raise ValueError("Each optimizer beta must be in [0, 1).")
 
     seed_everything(args.seed)
     device = resolve_device(args.device)
@@ -231,6 +257,12 @@ def run_training(args, policy_kind: str) -> None:
         "num_inference_steps": args.num_inference_steps,
         "crop_shape": None,
         "down_dims": tuple(args.down_dims),
+        "optimizer_lr": args.learning_rate,
+        "optimizer_betas": tuple(args.optimizer_betas),
+        "optimizer_eps": args.optimizer_eps,
+        "optimizer_weight_decay": args.weight_decay,
+        "scheduler_name": args.lr_scheduler,
+        "scheduler_warmup_steps": args.scheduler_warmup_steps,
     }
 
     if policy_kind == "scdp":
@@ -255,6 +287,8 @@ def run_training(args, policy_kind: str) -> None:
 
     policy.to(device)
     policy.train()
+    if uses_raw_state and not getattr(args, "compile_inference", False):
+        policy.diffusion.use_reference_inference()
     preprocessor, postprocessor = make_pre_post_processors(config, dataset_stats=metadata.stats)
 
     delta_timestamps = {
@@ -273,7 +307,6 @@ def run_training(args, policy_kind: str) -> None:
         num_workers=args.num_workers,
         shuffle=True,
         pin_memory=device.type == "cuda",
-        persistent_workers=args.num_workers > 0,
         drop_last=True,
     )
     if len(dataloader) == 0:
@@ -289,7 +322,15 @@ def run_training(args, policy_kind: str) -> None:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.jsonl"
-    optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
+    optimizer_config = config.get_optimizer_preset()
+    optimizer_config.grad_clip_norm = args.grad_clip_norm
+    optimizer = optimizer_config.build(policy.parameters())
+    scheduler = None
+    if args.lr_scheduler != "none":
+        scheduler = config.get_scheduler_preset().build(
+            optimizer,
+            num_training_steps=args.num_epochs * len(dataloader),
+        )
     optimizer.zero_grad(set_to_none=True)
 
     wandb_run = None
@@ -305,6 +346,56 @@ def run_training(args, policy_kind: str) -> None:
 
     best_success_rate = -1.0
     stop_early = False
+
+    def evaluate_checkpoint(epoch: int, step: int) -> bool:
+        nonlocal best_success_rate
+
+        policy.eval()
+        video_dir = output_dir / "videos" / f"epoch_{epoch:04d}" if args.save_video else None
+        success_rate = evaluate_policy(
+            policy=policy,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+            task_name=args.task_name,
+            num_episodes=args.num_eval_episodes,
+            seed=args.seed if args.eval_seed is None else args.eval_seed,
+            device=device,
+            uses_raw_state=uses_raw_state,
+            seed_mode=args.eval_seed_mode,
+            compile_inference=uses_raw_state and getattr(args, "compile_inference", False),
+            compile_mode=getattr(args, "compile_mode", "reduce-overhead"),
+            video_dir=video_dir,
+        )
+        eval_record = {
+            "epoch": epoch,
+            "step": step,
+            "eval/success_rate": success_rate,
+        }
+        append_jsonl(metrics_path, eval_record)
+        if wandb_run is not None:
+            wandb_run.log(eval_record)
+
+        if args.save_every_eval:
+            save_checkpoint(
+                policy,
+                preprocessor,
+                postprocessor,
+                output_dir / "checkpoints" / f"epoch_{epoch:04d}",
+            )
+        if success_rate > best_success_rate:
+            best_success_rate = success_rate
+            save_checkpoint(
+                policy,
+                preprocessor,
+                postprocessor,
+                output_dir / "checkpoints" / f"best_epoch_{epoch:04d}",
+            )
+
+        if success_rate >= args.early_stop_success_rate:
+            print(f"[train] reached early-stop success rate at epoch {epoch}")
+            return True
+        policy.train()
+        return False
 
     try:
         for epoch in range(args.num_epochs):
@@ -323,7 +414,14 @@ def run_training(args, policy_kind: str) -> None:
                     loss, _ = policy.forward(batch)
 
                 loss.backward()
+                grad_norm = None
+                if optimizer_config.grad_clip_norm > 0:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        policy.parameters(), optimizer_config.grad_clip_norm, error_if_nonfinite=False
+                    )
                 optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
 
                 global_step = epoch * len(dataloader) + batch_index
@@ -333,57 +431,20 @@ def run_training(args, policy_kind: str) -> None:
                         "epoch": epoch,
                         "step": global_step,
                         "train/loss": loss.item(),
+                        "train/grad_norm": grad_norm.item() if grad_norm is not None else None,
+                        "train/learning_rate": optimizer.param_groups[0]["lr"],
                     }
                     append_jsonl(metrics_path, record)
                     if wandb_run is not None:
                         wandb_run.log(record)
 
-            if epoch % args.eval_freq != 0:
-                continue
+                if epoch % args.eval_freq == 0 and batch_index == 0:
+                    stop_early = evaluate_checkpoint(epoch, global_step + 1)
+                    if stop_early:
+                        break
 
-            policy.eval()
-            video_dir = output_dir / "videos" / f"epoch_{epoch:04d}" if args.save_video else None
-            success_rate = evaluate_policy(
-                policy=policy,
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                task_name=args.task_name,
-                num_episodes=args.num_eval_episodes,
-                seed=args.eval_seed,
-                device=device,
-                uses_raw_state=uses_raw_state,
-                video_dir=video_dir,
-            )
-            eval_record = {
-                "epoch": epoch,
-                "step": (epoch + 1) * len(dataloader),
-                "eval/success_rate": success_rate,
-            }
-            append_jsonl(metrics_path, eval_record)
-            if wandb_run is not None:
-                wandb_run.log(eval_record)
-
-            if args.save_every_eval:
-                save_checkpoint(
-                    policy,
-                    preprocessor,
-                    postprocessor,
-                    output_dir / "checkpoints" / f"epoch_{epoch:04d}",
-                )
-            if success_rate > best_success_rate:
-                best_success_rate = success_rate
-                save_checkpoint(
-                    policy,
-                    preprocessor,
-                    postprocessor,
-                    output_dir / "checkpoints" / f"best_epoch_{epoch:04d}",
-                )
-
-            if success_rate >= args.early_stop_success_rate:
-                print(f"[train] reached early-stop success rate at epoch {epoch}")
-                stop_early = True
+            if stop_early:
                 break
-            policy.train()
 
         save_checkpoint(policy, preprocessor, postprocessor, output_dir / "checkpoints" / "final")
     finally:

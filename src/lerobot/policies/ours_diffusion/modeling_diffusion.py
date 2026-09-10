@@ -23,6 +23,7 @@ TODO(alexander-soare):
 import json
 import math
 from collections import deque
+from collections.abc import Callable
 
 import einops
 import torch
@@ -87,6 +88,12 @@ class OursDiffusionPolicy(PreTrainedPolicy):
 
     def get_optim_params(self) -> dict:
         return self.diffusion.parameters()
+
+    def optimize_for_inference(self, mode: str = "reduce-overhead") -> None:
+        """Enable the fixed-shape CUDA inference path after loading a checkpoint."""
+        if self.training:
+            raise RuntimeError("Call `policy.eval()` before optimizing SCDP for inference.")
+        self.diffusion.enable_inference_optimizations(mode=mode)
 
     def reset(self):
         """Clear observation and action queues. Should be called on `env.reset()`"""
@@ -214,6 +221,12 @@ class DiffusionModel(nn.Module):
             self.num_inference_steps = config.num_inference_steps
         self._inference_schedule_key = None
         self._model_timesteps = None
+        self._ddim_alpha_prod = None
+        self._ddim_alpha_prod_prev = None
+        self._compiled_image_encoder: Callable | None = None
+        self._compiled_denoise_step: Callable | None = None
+        self._compiled_denoise_loop: Callable | None = None
+        self._use_reference_inference = False
 
         action_min = config.action_min
         action_max = config.action_max
@@ -228,8 +241,16 @@ class DiffusionModel(nn.Module):
             action_min = tuple(stats["action"]["min"][:3])
             action_max = tuple(stats["action"]["max"][:3])
 
-        self.register_buffer("action_min", torch.tensor(action_min, dtype=torch.float32), persistent=False)
-        self.register_buffer("action_max", torch.tensor(action_max, dtype=torch.float32), persistent=False)
+        self.register_buffer(
+            "action_min",
+            torch.tensor(action_min, dtype=torch.float32),
+            persistent=False,
+        )
+        self.register_buffer(
+            "action_max",
+            torch.tensor(action_max, dtype=torch.float32),
+            persistent=False,
+        )
         self.register_buffer(
             "metaworld_cam_world_pos",
             torch.tensor(METAWORLD_CAM_WORLD_POS, dtype=torch.float32),
@@ -250,12 +271,13 @@ class DiffusionModel(nn.Module):
             torch.tensor(METAWORLD_MOCAP_HIGH, dtype=torch.float32),
             persistent=False,
         )
-
-        fovy = math.radians(METAWORLD_CAM_FOVY)
-        self.fy = (IMAGE_HEIGHT / 2) / math.tan(fovy / 2)
-        self.fx = self.fy * (IMAGE_WIDTH / IMAGE_HEIGHT)
-        self.cx = IMAGE_WIDTH / 2
-        self.cy = IMAGE_HEIGHT / 2
+        # Match the scalar arithmetic used by the reported training path.
+        focal_y = (IMAGE_HEIGHT / 2) / math.tan(math.radians(METAWORLD_CAM_FOVY) / 2)
+        focal_x = focal_y * (IMAGE_WIDTH / IMAGE_HEIGHT)
+        self.register_buffer("fy", torch.tensor(focal_y, dtype=torch.float32), persistent=False)
+        self.register_buffer("fx", torch.tensor(focal_x, dtype=torch.float32), persistent=False)
+        self.register_buffer("cx", torch.tensor(IMAGE_WIDTH / 2, dtype=torch.float32), persistent=False)
+        self.register_buffer("cy", torch.tensor(IMAGE_HEIGHT / 2, dtype=torch.float32), persistent=False)
 
     def _prepare_state_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """
@@ -271,6 +293,7 @@ class DiffusionModel(nn.Module):
         """
         img_features = self.rgb_encoder(einops.rearrange(batch[OBS_IMAGES], "b s n ... -> (b s n) ..."))
         return img_features
+
 
     def _grid_sampling(self, image_feature_maps: list[Tensor], raw_states: Tensor) -> Tensor:
         """Given a list of feature maps, extract a fixed number of features from each map
@@ -289,19 +312,39 @@ class DiffusionModel(nn.Module):
 
         # ((b s n), c, p, 1) -> ((b s n), c, p)
         sample_a = F.grid_sample(
-            image_feature_maps[0], grid, mode="bilinear", padding_mode="border", align_corners=False
+            image_feature_maps[0],
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
         ).squeeze(-1)
         sample_b = F.grid_sample(
-            image_feature_maps[1], grid, mode="bilinear", padding_mode="border", align_corners=False
+            image_feature_maps[1],
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
         ).squeeze(-1)
         sample_c = F.grid_sample(
-            image_feature_maps[2], grid, mode="bilinear", padding_mode="border", align_corners=False
+            image_feature_maps[2],
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
         ).squeeze(-1)
         sample_d = F.grid_sample(
-            image_feature_maps[3], grid, mode="bilinear", padding_mode="border", align_corners=False
+            image_feature_maps[3],
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
         ).squeeze(-1)
         sample_e = F.grid_sample(
-            image_feature_maps[4], grid, mode="bilinear", padding_mode="border", align_corners=False
+            image_feature_maps[4],
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
         ).squeeze(-1)
 
         sample_a = sample_a.mean(dim=-1)
@@ -313,6 +356,7 @@ class DiffusionModel(nn.Module):
         sample = torch.cat([sample_a, sample_b, sample_c, sample_d, sample_e], dim=-1)  # ((b s n), c*5)
         return sample
 
+
     def _dynamic_conditioning(
         self, image_feature_maps: list[Tensor], states: Tensor, state_cond: Tensor
     ) -> Tensor:
@@ -322,17 +366,15 @@ class DiffusionModel(nn.Module):
         return dynamic_cond
 
     def _metaworld_projection(self, raw_states: Tensor) -> Tensor:
+        """Project 3-D states with any leading shape in a single batched operation."""
         hand_cam_pos = (raw_states - self.metaworld_cam_world_pos) @ self.metaworld_cam_world_rot
-        hand_cam_pos_invz = hand_cam_pos[:, :, 2].reciprocal()
+        inverse_z = hand_cam_pos[..., 2].reciprocal()
 
-        u = self.fx * (hand_cam_pos[:, :, 0] * hand_cam_pos_invz) + self.cx
-        v = self.fy * (hand_cam_pos[:, :, 1] * -hand_cam_pos_invz) + self.cy
-        state = torch.stack([u, v], dim=-1)
-
-        # Normalize projected pixel coordinates to the grid_sample range.
-        state[:, :, 0] = 2 * (state[:, :, 0] / IMAGE_WIDTH) - 1
-        state[:, :, 1] = 2 * (state[:, :, 1] / IMAGE_HEIGHT) - 1
-        return state
+        u = self.fx * hand_cam_pos[..., 0] * inverse_z + self.cx
+        v = self.fy * hand_cam_pos[..., 1] * -inverse_z + self.cy
+        u = 2 * (u / IMAGE_WIDTH) - 1
+        v = 2 * (v / IMAGE_HEIGHT) - 1
+        return torch.stack((u, v), dim=-1)
 
     def _metaworld_movement(
         self,
@@ -355,72 +397,245 @@ class DiffusionModel(nn.Module):
         unnormalized_actions = self.action_min + actions * (self.action_max - self.action_min)
         return unnormalized_actions
 
+    def _project_points(self, raw_states: Tensor) -> Tensor:
+        return self._metaworld_projection(raw_states)
+
+    def _project_points_reference(self, raw_states: Tensor) -> Tensor:
+        return self._metaworld_projection_reference(raw_states)
+
+    def _move_points(self, current_states: Tensor, delta_states: Tensor) -> Tensor:
+        return self._metaworld_movement(current_states, delta_states)
+
+    def _project_sampled_trajectory(self, raw_states: Tensor, sample: Tensor) -> Tensor:
+        """Reconstruct recurrent states, then project the full trajectory at once."""
+        dynamic_states = raw_states
+        trajectory = [raw_states]
+        for index in range(1, 1 + self.config.sample_step):
+            delta_states = self._action_unnormalizer(sample[:, index, :3]).unsqueeze(1)
+            dynamic_states = self._move_points(dynamic_states, delta_states)
+            trajectory.append(dynamic_states)
+
+        states_3d = torch.stack(trajectory, dim=2)
+        return self._project_points(states_3d)
+
+    def _metaworld_projection_reference(self, raw_states: Tensor) -> Tensor:
+        """Match the scalar focal-length arithmetic used in the reported runs."""
+        focal_y = (IMAGE_HEIGHT / 2) / math.tan(math.radians(METAWORLD_CAM_FOVY) / 2)
+        focal_x = focal_y * (IMAGE_WIDTH / IMAGE_HEIGHT)
+        hand_cam_pos = (raw_states - self.metaworld_cam_world_pos) @ self.metaworld_cam_world_rot
+        inverse_z = hand_cam_pos[:, :, 2].reciprocal()
+
+        u = focal_x * hand_cam_pos[:, :, 0] * inverse_z + IMAGE_WIDTH / 2
+        v = focal_y * hand_cam_pos[:, :, 1] * -inverse_z + IMAGE_HEIGHT / 2
+        state = torch.stack((u, v), dim=-1)
+        state[:, :, 0] = 2 * (state[:, :, 0] / IMAGE_WIDTH) - 1
+        state[:, :, 1] = 2 * (state[:, :, 1] / IMAGE_HEIGHT) - 1
+        return state
+
+    def _project_sampled_trajectory_reference(self, raw_states: Tensor, sample: Tensor) -> Tensor:
+        """Match the sequential projection order used for the reported training runs."""
+        dynamic_states = raw_states
+        projected = [self._project_points_reference(raw_states)]
+        for index in range(1, 1 + self.config.sample_step):
+            delta_states = self._action_unnormalizer(sample[:, index, :3]).unsqueeze(1)
+            delta_states = delta_states.repeat(1, raw_states.shape[1], 1)
+            dynamic_states = self._move_points(dynamic_states, delta_states)
+            projected.append(self._project_points_reference(dynamic_states))
+        return torch.stack(projected, dim=2)
+
+    def use_reference_inference(self, enabled: bool = True) -> None:
+        """Select paper-compatible eager projection order for training-time evaluation."""
+        if enabled and (
+            self._compiled_denoise_step is not None or self._compiled_denoise_loop is not None
+        ):
+            raise RuntimeError("Reference inference cannot be enabled after compiling inference.")
+        self._use_reference_inference = enabled
+
+    def _cache_inference_schedule(self, device: torch.device, dtype: torch.dtype) -> None:
+        schedule_key = (self.num_inference_steps, device, dtype)
+        if self._inference_schedule_key == schedule_key:
+            return
+
+        self.noise_scheduler.set_timesteps(self.num_inference_steps)
+        timesteps = self.noise_scheduler.timesteps
+        self._model_timesteps = timesteps.to(device=device)
+
+        if self.config.noise_scheduler_type == "DDIM":
+            step_ratio = self.noise_scheduler.config.num_train_timesteps // self.num_inference_steps
+            indices = self._model_timesteps.long()
+            previous_indices = indices - step_ratio
+            alphas = self.noise_scheduler.alphas_cumprod.to(device=device, dtype=dtype)
+            final_alpha = self.noise_scheduler.final_alpha_cumprod.to(device=device, dtype=dtype)
+            self._ddim_alpha_prod = alphas[indices]
+            self._ddim_alpha_prod_prev = torch.where(
+                previous_indices >= 0,
+                alphas[previous_indices.clamp_min(0)],
+                final_alpha,
+            )
+
+        self._inference_schedule_key = schedule_key
+
+    def _compiled_ddim_step(
+        self,
+        sample: Tensor,
+        raw_states: Tensor,
+        image_feature_maps: list[Tensor],
+        state_cond: Tensor,
+        model_t: Tensor,
+        alpha_prod_t: Tensor,
+        alpha_prod_prev: Tensor,
+    ) -> Tensor:
+        batch_size, n_obs_steps = raw_states.shape[:2]
+        projected_states = self._project_sampled_trajectory(raw_states, sample)
+        dynamic_cond = self._dynamic_conditioning(image_feature_maps, projected_states, state_cond)
+        dynamic_cond = einops.rearrange(dynamic_cond, "(b s) ... -> b (s ...)", b=batch_size, s=n_obs_steps)
+        model_output = self.unet(sample, model_t.expand(batch_size), global_cond=dynamic_cond)
+
+        beta_prod_t = 1 - alpha_prod_t
+        if self.config.prediction_type == "epsilon":
+            predicted_original = (sample - beta_prod_t.sqrt() * model_output) / alpha_prod_t.sqrt()
+            predicted_epsilon = model_output
+        elif self.config.prediction_type == "sample":
+            predicted_original = model_output
+            predicted_epsilon = (sample - alpha_prod_t.sqrt() * predicted_original) / beta_prod_t.sqrt()
+        else:
+            raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
+
+        if self.config.clip_sample:
+            predicted_original = predicted_original.clamp(
+                -self.config.clip_sample_range, self.config.clip_sample_range
+            )
+        direction = (1 - alpha_prod_prev).sqrt() * predicted_epsilon
+        return alpha_prod_prev.sqrt() * predicted_original + direction
+
+    def _compiled_ddim_loop(
+        self,
+        sample: Tensor,
+        raw_states: Tensor,
+        image_feature_maps: list[Tensor],
+        state_cond: Tensor,
+        model_timesteps: Tensor,
+        alpha_prod: Tensor,
+        alpha_prod_prev: Tensor,
+    ) -> Tensor:
+        for index in range(self.num_inference_steps):
+            sample = self._compiled_ddim_step(
+                sample,
+                raw_states,
+                image_feature_maps,
+                state_cond,
+                model_timesteps[index],
+                alpha_prod[index],
+                alpha_prod_prev[index],
+            )
+        return sample
+
+    def enable_inference_optimizations(self, mode: str = "reduce-overhead") -> None:
+        """Compile fixed-shape vision and DDIM graphs for deployment inference."""
+        if self._compiled_denoise_step is not None or self._compiled_denoise_loop is not None:
+            return
+        if get_device_from_parameters(self).type != "cuda":
+            raise RuntimeError("Compiled SCDP inference requires a CUDA model.")
+        if self.config.noise_scheduler_type != "DDIM":
+            raise ValueError("Compiled SCDP inference currently requires the DDIM scheduler.")
+        if self.config.use_separate_rgb_encoder_per_camera:
+            raise ValueError("Compiled SCDP inference requires the shared RGB encoder.")
+        safe_modes = {"reduce-overhead", "default", "max-autotune-no-cudagraphs"}
+        if mode not in safe_modes:
+            raise ValueError(
+                f"Unsupported compile mode {mode!r}; choose one of {safe_modes}."
+            )
+
+        compile_options = {"fullgraph": True, "dynamic": False, "mode": mode}
+        self._compiled_image_encoder = torch.compile(self.rgb_encoder.forward, **compile_options)
+        if mode == "reduce-overhead":
+            self._compiled_denoise_loop = torch.compile(self._compiled_ddim_loop, **compile_options)
+        else:
+            self._compiled_denoise_step = torch.compile(self._compiled_ddim_step, **compile_options)
+
     # ========= inference  ============
     @torch.no_grad()
     def conditional_sample(
         self,
-        batch: Tensor,
+        batch: dict[str, Tensor],
         raw_states: Tensor | None = None,
         generator: torch.Generator | None = None,
         noise: Tensor | None = None,
     ) -> Tensor:
+        if raw_states is None:
+            raise ValueError("SCDP inference requires raw 3-D states.")
+
         device = get_device_from_parameters(self)
         dtype = get_dtype_from_parameters(self)
-
         batch_size, n_obs_steps = batch[OBS_STATE].shape[:2]
         assert n_obs_steps == self.config.n_obs_steps
 
-        state_cond = self._prepare_state_conditioning(batch)  # (B, s, state_dim)
-        image_feature_maps = self._prepare_image_feature_maps(batch)
+        if self._compiled_denoise_loop is not None:
+            torch.compiler.cudagraph_mark_step_begin()
 
-        # Sample prior.
+        state_cond = self._prepare_state_conditioning(batch)
+        if self._compiled_image_encoder is None:
+            image_feature_maps = self._prepare_image_feature_maps(batch)
+        else:
+            flat_images = einops.rearrange(batch[OBS_IMAGES], "b s n ... -> (b s n) ...")
+            image_feature_maps = self._compiled_image_encoder(flat_images)
+
         sample = (
             noise
             if noise is not None
             else torch.randn(
-                size=(batch_size, self.config.horizon, self.config.action_feature.shape[0]),
+                (batch_size, self.config.horizon, self.config.action_feature.shape[0]),
                 dtype=dtype,
                 device=device,
                 generator=generator,
             )
         )
+        self._cache_inference_schedule(device, dtype)
 
-        # Scheduler timesteps stay on CPU for scheduler.step(), while one GPU copy is
-        # cached for the U-Net. This avoids rebuilding the schedule and allocating a
-        # new timestep batch at every denoising step and action chunk.
-        schedule_key = (self.num_inference_steps, device)
-        if self._inference_schedule_key != schedule_key:
-            self.noise_scheduler.set_timesteps(self.num_inference_steps)
-            self._model_timesteps = self.noise_scheduler.timesteps.to(device=device)
-            self._inference_schedule_key = schedule_key
+        if self._compiled_denoise_loop is not None:
+            sample = self._compiled_denoise_loop(
+                sample,
+                raw_states,
+                image_feature_maps,
+                state_cond,
+                self._model_timesteps,
+                self._ddim_alpha_prod,
+                self._ddim_alpha_prod_prev,
+            )
+            return sample.clone()
 
-        for t, model_t in zip(self.noise_scheduler.timesteps, self._model_timesteps, strict=True):
-            # Dynamic Conditioning
-            dynamic_states = raw_states
-            projected_raw_states = self._metaworld_projection(raw_states)
-            state_list = [projected_raw_states]
+        if self._compiled_denoise_step is not None:
+            for index, model_t in enumerate(self._model_timesteps):
+                sample = self._compiled_denoise_step(
+                    sample,
+                    raw_states,
+                    image_feature_maps,
+                    state_cond,
+                    model_t,
+                    self._ddim_alpha_prod[index],
+                    self._ddim_alpha_prod_prev[index],
+                )
+            return sample
 
-            for i in range(1, 1 + self.config.sample_step):
-                delta_states = self._action_unnormalizer(sample[:, i, :3]).unsqueeze(1).expand(-1, 2, -1)
-                dynamic_states = self._metaworld_movement(dynamic_states, delta_states)
-                projected_dynamic_states = self._metaworld_projection(dynamic_states)
-
-                state_list.append(projected_dynamic_states)
-            states = torch.stack(state_list, dim=2)  # (b, s, p, 2)
-
-            dynamic_cond = self._dynamic_conditioning(image_feature_maps, states, state_cond)
+        for scheduler_t, model_t in zip(self.noise_scheduler.timesteps, self._model_timesteps, strict=True):
+            project = (
+                self._project_sampled_trajectory_reference
+                if self._use_reference_inference
+                else self._project_sampled_trajectory
+            )
+            projected_states = project(raw_states, sample)
+            dynamic_cond = self._dynamic_conditioning(image_feature_maps, projected_states, state_cond)
             dynamic_cond = einops.rearrange(
                 dynamic_cond, "(b s) ... -> b (s ...)", b=batch_size, s=n_obs_steps
-            )  # (b, global_cond_dim)
-
-            # Predict model output.
+            )
             model_output = self.unet(
                 sample,
                 model_t.expand(batch_size),
                 global_cond=dynamic_cond,
             )
-            # Compute previous image: x_t -> x_t-1
-            sample = self.noise_scheduler.step(model_output, t, sample, generator=generator).prev_sample
+            sample = self.noise_scheduler.step(
+                model_output, scheduler_t, sample, generator=generator
+            ).prev_sample
 
         return sample
 
@@ -493,22 +708,10 @@ class DiffusionModel(nn.Module):
         # Add noise to the clean trajectories according to the noise magnitude at each timestep.
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
-        # Dynamic Conditioning
+        # Preserve the sequential projection order used in the reported training runs.
+        # The vectorized projection is reserved for optimized deployment inference.
         with torch.no_grad():
-            dynamic_states = raw_states
-            projected_raw_states = self._metaworld_projection(raw_states)
-            state_list = [projected_raw_states]
-
-            for i in range(1, 1 + self.config.sample_step):
-                delta_states = (
-                    self._action_unnormalizer(noisy_trajectory[:, i, :3]).unsqueeze(1).expand(-1, 2, -1)
-                )
-                dynamic_states = self._metaworld_movement(dynamic_states, delta_states)
-                projected_dynamic_states = self._metaworld_projection(dynamic_states)
-
-                state_list.append(projected_dynamic_states)
-
-            states = torch.stack(state_list, dim=2)  # (b, s, p, 2)
+            states = self._project_sampled_trajectory_reference(raw_states, noisy_trajectory)
 
         dynamic_cond = self._dynamic_conditioning(image_feature_maps, states, state_cond)
         dynamic_cond = einops.rearrange(
@@ -628,10 +831,14 @@ class DiffusionConditionalUnet1d(nn.Module):
         self.mid_modules = nn.ModuleList(
             [
                 DiffusionConditionalResidualBlock1d(
-                    config.down_dims[-1], config.down_dims[-1], **common_res_block_kwargs
+                    config.down_dims[-1],
+                    config.down_dims[-1],
+                    **common_res_block_kwargs,
                 ),
                 DiffusionConditionalResidualBlock1d(
-                    config.down_dims[-1], config.down_dims[-1], **common_res_block_kwargs
+                    config.down_dims[-1],
+                    config.down_dims[-1],
+                    **common_res_block_kwargs,
                 ),
             ]
         )

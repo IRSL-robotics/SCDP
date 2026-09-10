@@ -5,6 +5,10 @@ import torch
 
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.policies.ours_diffusion_real.camera_geometry import (
+    PinholeCameraCalibration,
+    PinholeCameraProjector,
+)
 from lerobot.policies.ours_diffusion_real.configuration_diffusion import OursDiffusionRealConfig
 from lerobot.policies.ours_diffusion_real.modeling_diffusion import OursDiffusionRealPolicy
 
@@ -33,6 +37,38 @@ def make_config(**overrides):
     return OursDiffusionRealConfig(**values)
 
 
+def test_standard_world_to_camera_matrix_projects_expected_pixels():
+    values = {
+        "camera_image_size": [240, 320],
+        "camera_intrinsics": [
+            [320.0, 0.0, 160.0],
+            [0.0, 240.0, 120.0],
+            [0.0, 0.0, 1.0],
+        ],
+        "world_to_camera_matrix": [
+            [1.0, 0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0, -2.0],
+            [0.0, 0.0, 1.0, -3.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }
+    calibration = PinholeCameraCalibration.from_mapping(values)
+    projector = PinholeCameraProjector(calibration)
+    points_world = torch.tensor([[[1.0, 2.0, 4.0], [1.5, 2.5, 4.0]]])
+
+    projected = projector(points_world)
+
+    torch.testing.assert_close(
+        torch.tensor(calibration.camera_position_world),
+        torch.tensor([1.0, 2.0, 3.0]),
+    )
+    torch.testing.assert_close(
+        torch.tensor(calibration.world_to_camera_matrix),
+        torch.tensor(values["world_to_camera_matrix"]),
+    )
+    torch.testing.assert_close(projected, torch.tensor([[[0.0, 0.0], [1.0, 1.0]]]))
+
+
 def test_real_scdp_constructs_and_projects_on_cpu():
     policy = OursDiffusionRealPolicy(make_config())
     raw_states = torch.tensor([[[0.0, 0.0, 1.0], [0.5, 0.5, 1.0]]])
@@ -40,6 +76,24 @@ def test_real_scdp_constructs_and_projects_on_cpu():
 
     torch.testing.assert_close(projected, torch.tensor([[[0.0, 0.0], [1.0, 1.0]]]))
     assert projected.device.type == "cpu"
+
+
+def test_real_scdp_reference_training_path_uses_real_calibration():
+    policy = OursDiffusionRealPolicy(make_config(sample_step=2))
+    model = policy.diffusion
+    raw_states = torch.tensor([[[0.0, 0.0, 1.0], [0.5, 0.5, 1.0]]])
+    sample = torch.zeros(1, model.config.horizon, 7)
+
+    actual = model._project_sampled_trajectory_reference(raw_states, sample)
+
+    dynamic_states = raw_states
+    expected = [model._real_projection(raw_states)]
+    for index in range(1, 1 + model.config.sample_step):
+        delta = model._action_unnormalizer(sample[:, index, :3]).unsqueeze(1)
+        dynamic_states = model._real_movement(dynamic_states, delta)
+        expected.append(model._real_projection(dynamic_states))
+
+    torch.testing.assert_close(actual, torch.stack(expected, dim=2))
 
 
 def test_real_config_keeps_calibration_and_action_bounds(tmp_path):

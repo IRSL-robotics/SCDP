@@ -197,7 +197,9 @@ class DiffusionConfig(PreTrainedConfig):
             weight_decay=self.optimizer_weight_decay,
         )
 
-    def get_scheduler_preset(self) -> DiffuserSchedulerConfig:
+    def get_scheduler_preset(self) -> DiffuserSchedulerConfig | None:
+        if self.scheduler_name == "none":
+            return None
         return DiffuserSchedulerConfig(
             name=self.scheduler_name,
             num_warmup_steps=self.scheduler_warmup_steps,

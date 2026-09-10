@@ -20,7 +20,15 @@ from PIL import Image
 class RealPolicyRunner:
     """Stateful action-chunk runner suitable for wrapping in a robot control process."""
 
-    def __init__(self, checkpoint: Path, policy_kind: str, device: str, dataset_dir: Path | None = None):
+    def __init__(
+        self,
+        checkpoint: Path,
+        policy_kind: str,
+        device: str,
+        dataset_dir: Path | None = None,
+        compile_inference: bool = True,
+        compile_mode: str = "reduce-overhead",
+    ):
         self.device = resolve_device(device)
         self.policy, self.preprocessor, self.postprocessor, self.uses_raw_state = load_real_checkpoint(
             checkpoint=checkpoint,
@@ -28,6 +36,8 @@ class RealPolicyRunner:
             device=self.device,
             dataset_dir=dataset_dir,
         )
+        if compile_inference and self.uses_raw_state:
+            self.policy.optimize_for_inference(mode=compile_mode)
         self.image_key, self.image_feature = next(iter(self.policy.config.image_features.items()))
         self.state_feature = self.policy.config.robot_state_feature
         self.raw_state_history: deque[torch.Tensor] = deque(maxlen=self.policy.config.n_obs_steps)
@@ -92,10 +102,16 @@ def parse_args():
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--policy", choices=("dp", "scdp"), required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--compile-inference", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--compile-mode", default="reduce-overhead")
     parser.add_argument("--dataset-dir", type=Path, help="Only needed for a legacy SCDP checkpoint.")
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--image", type=Path, help="Single RGB image for a one-step prediction.")
-    inputs.add_argument("--input-jsonl", type=Path, help="JSONL stream with `image`, `state`, and optional `reset`.")
+    inputs.add_argument(
+        "--input-jsonl",
+        type=Path,
+        help="JSONL stream with `image`, `state`, and optional `reset`.",
+    )
     parser.add_argument("--state", type=float, nargs="+", help="Robot state paired with --image.")
     return parser.parse_args()
 
@@ -112,6 +128,8 @@ def main() -> None:
         policy_kind=args.policy,
         device=args.device,
         dataset_dir=args.dataset_dir.expanduser().resolve() if args.dataset_dir else None,
+        compile_inference=args.compile_inference,
+        compile_mode=args.compile_mode,
     )
     if args.image is not None:
         action = runner.step(args.image.expanduser().resolve(), args.state)

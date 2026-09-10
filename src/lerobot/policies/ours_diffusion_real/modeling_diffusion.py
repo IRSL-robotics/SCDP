@@ -27,8 +27,16 @@ from lerobot.policies.ours_diffusion.modeling_diffusion import (
     OursDiffusionPolicy,
     _make_noise_scheduler,
 )
-from lerobot.policies.ours_diffusion_real.configuration_diffusion import OursDiffusionRealConfig
-from lerobot.policies.ours_diffusion_real.ours_encoder import OursDiffusionRealRgbEncoder
+from lerobot.policies.ours_diffusion_real.camera_geometry import (
+    PinholeCameraCalibration,
+    PinholeCameraProjector,
+)
+from lerobot.policies.ours_diffusion_real.configuration_diffusion import (
+    OursDiffusionRealConfig,
+)
+from lerobot.policies.ours_diffusion_real.ours_encoder import (
+    OursDiffusionRealRgbEncoder,
+)
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import OBS_STATE
 
@@ -89,6 +97,12 @@ class OursDiffusionRealModel(DiffusionModel):
         )
         self._inference_schedule_key = None
         self._model_timesteps = None
+        self._ddim_alpha_prod = None
+        self._ddim_alpha_prod_prev = None
+        self._compiled_image_encoder = None
+        self._compiled_denoise_step = None
+        self._compiled_denoise_loop = None
+        self._use_reference_inference = False
 
         action_min = config.action_min
         action_max = config.action_max
@@ -103,66 +117,43 @@ class OursDiffusionRealModel(DiffusionModel):
             action_min = tuple(stats["action"]["min"][:3])
             action_max = tuple(stats["action"]["max"][:3])
 
-        self.register_buffer("action_min", torch.tensor(action_min, dtype=torch.float32), persistent=False)
-        self.register_buffer("action_max", torch.tensor(action_max, dtype=torch.float32), persistent=False)
         self.register_buffer(
-            "camera_world_position",
-            torch.tensor(config.camera_world_position, dtype=torch.float32),
+            "action_min",
+            torch.tensor(action_min, dtype=torch.float32),
             persistent=False,
         )
         self.register_buffer(
-            "camera_world_rotation",
-            torch.tensor(config.camera_world_rotation, dtype=torch.float32),
+            "action_max",
+            torch.tensor(action_max, dtype=torch.float32),
             persistent=False,
         )
-
-        image_height, image_width = config.camera_image_size
-        intrinsic = torch.tensor(config.camera_intrinsics, dtype=torch.float32)
-        fx, fy = intrinsic[0, 0], intrinsic[1, 1]
-        cx, cy = intrinsic[0, 2], intrinsic[1, 2]
-        if config.crop_shape is not None:
-            crop_height, crop_width = config.crop_shape
-            top = round((image_height - crop_height) / 2)
-            left = round((image_width - crop_width) / 2)
-            cx = cx - left
-            cy = cy - top
-            image_height, image_width = crop_height, crop_width
-        self.register_buffer(
-            "projection_intrinsics",
-            torch.stack([fx, fy, cx, cy]),
-            persistent=False,
+        calibration = PinholeCameraCalibration.from_policy_config(
+            camera_image_size=config.camera_image_size,
+            camera_intrinsics=config.camera_intrinsics,
+            camera_world_position=config.camera_world_position,
+            camera_world_rotation=config.camera_world_rotation,
         )
-        self.projection_image_size = (image_height, image_width)
+        self.camera_geometry = PinholeCameraProjector(
+            calibration,
+            crop_shape=config.crop_shape,
+        )
 
     def _prepare_state_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         state_features = self.state_mlp(batch[OBS_STATE])
         return einops.rearrange(state_features, "b s ... -> (b s) ...")
 
     def _real_projection(self, raw_states: Tensor) -> Tensor:
-        camera_states = (raw_states - self.camera_world_position) @ self.camera_world_rotation
-        fx, fy, cx, cy = self.projection_intrinsics
-        u = (fx * (camera_states[:, :, 0] / camera_states[:, :, 2]) + cx).unsqueeze(-1)
-        v = (fy * (camera_states[:, :, 1] / camera_states[:, :, 2]) + cy).unsqueeze(-1)
-        projected = torch.cat([u, v], dim=-1)
-
-        image_height, image_width = self.projection_image_size
-        projected[:, :, 0] = 2 * (projected[:, :, 0] / image_width) - 1
-        projected[:, :, 1] = 2 * (projected[:, :, 1] / image_height) - 1
-        return projected
+        """Project 3-D states with any leading shape in a single batched operation."""
+        return self.camera_geometry(raw_states)
 
     def _real_movement(self, current_states: Tensor, delta_states: Tensor) -> Tensor:
         return current_states + torch.clamp(delta_states, min=-1, max=1)
 
-    # The shared optimized loop calls these hooks. Aliases keep the Meta-World
-    # implementation untouched while replacing only the real-world geometry.
-    def _metaworld_projection(self, raw_states: Tensor) -> Tensor:
+    def _project_points(self, raw_states: Tensor) -> Tensor:
         return self._real_projection(raw_states)
 
-    def _metaworld_movement(
-        self,
-        current_states: Tensor,
-        delta_states: Tensor,
-        action_scale: float = 1.0,
-    ) -> Tensor:
-        del action_scale
+    def _project_points_reference(self, raw_states: Tensor) -> Tensor:
+        return self._real_projection(raw_states)
+
+    def _move_points(self, current_states: Tensor, delta_states: Tensor) -> Tensor:
         return self._real_movement(current_states, delta_states)

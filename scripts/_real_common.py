@@ -19,6 +19,9 @@ from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.policies.ours_diffusion_real.camera_geometry import (
+    load_camera_calibration,
+)
 from lerobot.policies.ours_diffusion_real.configuration_diffusion import OursDiffusionRealConfig
 from lerobot.policies.ours_diffusion_real.modeling_diffusion import OursDiffusionRealPolicy
 from lerobot.processor import DeviceProcessorStep
@@ -55,21 +58,6 @@ def save_checkpoint(policy, preprocessor, postprocessor, checkpoint_dir: Path) -
     postprocessor.save_pretrained(checkpoint_dir)
 
 
-def load_camera_calibration(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as stream:
-        calibration = json.load(stream)
-
-    required = {
-        "camera_image_size",
-        "camera_intrinsics",
-        "camera_world_position",
-        "camera_world_rotation",
-    }
-    missing = required - set(calibration)
-    if missing:
-        raise ValueError(f"Camera calibration is missing fields: {sorted(missing)}")
-    return {name: calibration[name] for name in required}
-
 
 def _action_bound(stats: dict[str, Any], name: str) -> tuple[float, ...]:
     values = torch.as_tensor(stats["action"][name], dtype=torch.float32)[:3]
@@ -94,9 +82,7 @@ def load_real_dataset(
         "observation.state": features["observation.state"],
         image_key: features[image_key],
     }
-    output_features = {
-        key: value for key, value in features.items() if value.type is FeatureType.ACTION
-    }
+    output_features = {key: value for key, value in features.items() if value.type is FeatureType.ACTION}
     if set(output_features) != {"action"}:
         raise ValueError(f"Expected one `action` output feature, got {sorted(output_features)}.")
     return metadata, input_features, output_features
@@ -137,7 +123,7 @@ def run_training(args, policy_kind: str) -> None:
         calibration = load_camera_calibration(Path(args.camera_calibration).expanduser().resolve())
         config = OursDiffusionRealConfig(
             **common_config,
-            **calibration,
+            **calibration.as_policy_config(),
             use_separate_rgb_encoder_per_camera=False,
             sample_step=args.sample_step,
             action_min=_action_bound(metadata.stats, "min"),
@@ -179,8 +165,7 @@ def run_training(args, policy_kind: str) -> None:
     )
     if len(dataloader) == 0:
         raise RuntimeError(
-            f"The dataset has fewer usable frames than batch size {args.batch_size}. "
-            "Reduce --batch-size."
+            f"The dataset has fewer usable frames than batch size {args.batch_size}. Reduce --batch-size."
         )
 
     output_dir = (

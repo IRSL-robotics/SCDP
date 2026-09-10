@@ -102,9 +102,7 @@ class OursDiffusionRgbEncoder(nn.Module):
 
     def __init__(self, config=None):
         super().__init__()
-        shared_group_norm = bool(
-            getattr(config, "use_shared_group_norm_in_residual_blocks", False)
-        )
+        shared_group_norm = bool(getattr(config, "use_shared_group_norm_in_residual_blocks", False))
         self.blockA = ResidualBlockA(in_channels=3, out_channels=64)
         self.blockB = ResidualBlockB(
             in_channels=64,
