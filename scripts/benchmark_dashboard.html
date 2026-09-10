@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCDP Full Benchmark</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071019;
+      --surface: #0c1723;
+      --surface-2: #111f2d;
+      --surface-3: #172738;
+      --line: #223448;
+      --line-soft: rgba(137, 166, 196, .14);
+      --text: #edf6ff;
+      --muted: #8ea2b8;
+      --muted-2: #65798f;
+      --cyan: #36d4e8;
+      --cyan-soft: rgba(54, 212, 232, .12);
+      --green: #51dd9b;
+      --green-soft: rgba(81, 221, 155, .12);
+      --yellow: #f1c45b;
+      --yellow-soft: rgba(241, 196, 91, .12);
+      --red: #ff7185;
+      --red-soft: rgba(255, 113, 133, .12);
+      --purple: #ac8cff;
+      --radius: 14px;
+      --shadow: 0 16px 44px rgba(0, 0, 0, .22);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 82% -10%, rgba(54, 212, 232, .10), transparent 30rem),
+        radial-gradient(circle at -5% 20%, rgba(72, 114, 255, .07), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+    .shell { width: min(1480px, calc(100% - 40px)); margin: 0 auto; padding: 30px 0 52px; }
+    .topbar { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 28px; }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand-mark {
+      width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+      color: #061219; font-weight: 900; letter-spacing: -.05em;
+      background: linear-gradient(145deg, #67ebc6, #35cfe8);
+      box-shadow: 0 8px 28px rgba(54, 212, 232, .19);
+    }
+    h1 { font-size: clamp(22px, 3vw, 30px); line-height: 1.15; margin: 0 0 5px; letter-spacing: -.035em; }
+    .eyebrow { color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; margin-bottom: 5px; }
+    .subtitle { color: var(--muted); margin: 0; }
+    .top-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; }
+    .live-box { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-2); }
+    .live-dot.active { background: var(--green); box-shadow: 0 0 0 5px rgba(81,221,155,.09), 0 0 16px rgba(81,221,155,.45); animation: pulse 2s ease infinite; }
+    .live-dot.error { background: var(--red); box-shadow: 0 0 12px rgba(255,113,133,.4); }
+    @keyframes pulse { 50% { opacity: .55; } }
+
+    .button {
+      border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
+      min-height: 38px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px;
+      cursor: pointer; transition: border-color .18s, background .18s, transform .18s;
+    }
+    .button:hover { border-color: #38516b; background: var(--surface-3); }
+    .button:active { transform: translateY(1px); }
+    .button:disabled { cursor: wait; opacity: .65; }
+    .refresh-icon { font-size: 17px; line-height: 1; display: inline-block; }
+    .is-loading .refresh-icon { animation: spin .75s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-banner {
+      display: none; margin: -12px 0 20px; padding: 11px 14px; border: 1px solid rgba(255,113,133,.28);
+      border-radius: 10px; background: var(--red-soft); color: #ffc1ca;
+    }
+    .error-banner.visible { display: flex; gap: 9px; align-items: center; }
+
+    .overview { display: grid; grid-template-columns: minmax(260px, 1.65fr) repeat(4, minmax(140px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--line-soft); border-radius: var(--radius); background: linear-gradient(150deg, rgba(17,31,45,.94), rgba(10,22,33,.94)); box-shadow: var(--shadow); }
+    .progress-card { padding: 22px; }
+    .card-label { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+    .progress-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 15px; margin-top: 8px; }
+    .progress-value { font-size: 32px; font-weight: 780; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+    .progress-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .track { width: 100%; height: 8px; overflow: hidden; border-radius: 99px; background: #1a2a39; margin-top: 17px; }
+    .track-fill { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--green)); transition: width .45s ease; box-shadow: 0 0 16px rgba(54,212,232,.3); }
+    .progress-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 13px; color: var(--muted); font-size: 12px; }
+    .meta-key { color: var(--text); font-weight: 650; }
+    .metric { min-height: 151px; padding: 19px; display: flex; flex-direction: column; justify-content: space-between; }
+    .metric-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--cyan-soft); color: var(--cyan); font-size: 15px; }
+    .metric.green .metric-icon { color: var(--green); background: var(--green-soft); }
+    .metric.yellow .metric-icon { color: var(--yellow); background: var(--yellow-soft); }
+    .metric.red .metric-icon { color: var(--red); background: var(--red-soft); }
+    .metric-value { font-size: 25px; font-weight: 750; letter-spacing: -.035em; font-variant-numeric: tabular-nums; margin-top: 13px; }
+    .metric-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+    .context-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 16px 0 24px; color: var(--muted); font-size: 12px; }
+    .context-group { display: flex; gap: 18px; flex-wrap: wrap; }
+    .launcher { display: inline-flex; align-items: center; gap: 7px; }
+    .launcher-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); }
+    .launcher.active .launcher-dot { background: var(--green); }
+
+    .panel { overflow: hidden; }
+    .panel-head { padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line-soft); }
+    .panel-title-wrap { min-width: 180px; }
+    .panel-title { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+    .panel-desc { color: var(--muted); font-size: 11px; margin-top: 3px; }
+    .filters { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex: 1; }
+    .input-wrap { position: relative; flex: 0 1 270px; }
+    .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted-2); pointer-events: none; }
+    .control {
+      width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 9px;
+      background: #0a1520; color: var(--text); padding: 0 12px;
+    }
+    .input-wrap .control { padding-left: 34px; }
+    .control::placeholder { color: var(--muted-2); }
+    select.control { width: auto; min-width: 125px; cursor: pointer; }
+
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 1040px; table-layout: fixed; }
+    col.task { width: 19%; } col.mean { width: 13%; } col.seed { width: 22.666%; }
+    th { text-align: left; padding: 11px 15px; background: rgba(7,16,25,.46); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; font-weight: 750; }
+    td { border-top: 1px solid var(--line-soft); padding: 11px 15px; vertical-align: middle; }
+    tbody tr { transition: background .15s; }
+    tbody tr:hover { background: rgba(39, 66, 89, .09); }
+    .task-name { font-weight: 680; overflow-wrap: anywhere; letter-spacing: -.01em; }
+    .task-count { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .mean-main { font-size: 17px; font-weight: 760; font-variant-numeric: tabular-nums; }
+    .mean-main.waiting { font-size: 13px; color: var(--muted); font-weight: 600; }
+    .mean-sub { color: var(--muted); font-size: 10px; margin-top: 2px; }
+    .seed-button {
+      width: 100%; min-height: 59px; border: 1px solid transparent; border-radius: 9px; background: transparent;
+      padding: 6px 7px; margin: -6px -7px; text-align: left; cursor: pointer; display: block;
+      transition: background .15s, border-color .15s;
+    }
+    .seed-button:hover { background: rgba(54,212,232,.055); border-color: rgba(54,212,232,.14); }
+    .seed-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .rate { font-weight: 760; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .rate.pending { color: var(--muted); font-weight: 590; font-size: 11px; }
+    .status { display: inline-flex; align-items: center; gap: 5px; border-radius: 99px; padding: 2px 7px; font-size: 10px; font-weight: 700; white-space: nowrap; background: rgba(142,162,184,.1); color: #a8bacb; }
+    .status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .status.completed { color: var(--green); background: var(--green-soft); }
+    .status.training, .status.collecting, .status.starting { color: var(--cyan); background: var(--cyan-soft); }
+    .status.evaluating, .status.finalizing { color: var(--yellow); background: var(--yellow-soft); }
+    .status.failed, .status.interrupted { color: var(--red); background: var(--red-soft); }
+    .status.training .status-dot, .status.evaluating .status-dot, .status.collecting .status-dot, .status.starting .status-dot { animation: pulse 1.5s ease infinite; }
+    .seed-bottom { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .mini-track { height: 3px; flex: 1; min-width: 30px; border-radius: 99px; background: #1e3041; overflow: hidden; }
+    .mini-fill { height: 100%; border-radius: inherit; background: var(--cyan); }
+    .epoch { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .empty-row td { text-align: center; padding: 60px 20px; color: var(--muted); }
+    .empty-symbol { display: block; font-size: 25px; margin-bottom: 8px; opacity: .7; }
+    .skeleton { height: 12px; border-radius: 7px; background: linear-gradient(90deg, #142332 20%, #1b3042 45%, #142332 70%); background-size: 260% 100%; animation: shimmer 1.4s infinite; }
+    @keyframes shimmer { to { background-position: -260% 0; } }
+    .footnote { padding: 12px 20px 15px; border-top: 1px solid var(--line-soft); color: var(--muted-2); font-size: 10px; }
+
+    dialog {
+      width: min(940px, calc(100vw - 32px)); max-height: min(870px, calc(100vh - 32px));
+      padding: 0; border: 1px solid #2b4054; border-radius: 16px; background: #0a1520;
+      color: var(--text); box-shadow: 0 28px 90px rgba(0,0,0,.58); overflow: hidden;
+    }
+    dialog::backdrop { background: rgba(2, 8, 13, .74); backdrop-filter: blur(3px); }
+    .modal-inner { max-height: min(870px, calc(100vh - 32px)); overflow: auto; }
+    .modal-head { position: sticky; top: 0; z-index: 3; background: rgba(10,21,32,.95); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); padding: 18px 20px; display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+    .modal-title { margin: 0; font-size: 19px; letter-spacing: -.025em; }
+    .modal-kicker { color: var(--cyan); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 4px; }
+    .close { border: 1px solid var(--line); border-radius: 9px; width: 36px; height: 36px; background: var(--surface-2); cursor: pointer; font-size: 20px; line-height: 1; }
+    .modal-content { padding: 20px; }
+    .modal-state { padding: 60px 20px; text-align: center; color: var(--muted); }
+    .detail-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+    .detail-stat { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 11px; padding: 13px; }
+    .detail-label { color: var(--muted); font-size: 10px; margin-bottom: 4px; }
+    .detail-value { font-size: 17px; font-weight: 730; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .chart-card, .log-card { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 11px; overflow: hidden; }
+    .chart-head, .log-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 12px 14px 0; }
+    .chart-title, .log-title { font-size: 12px; font-weight: 700; }
+    .chart-note { font-size: 9px; color: var(--muted); }
+    .chart { width: 100%; height: 190px; display: block; }
+    .axis { stroke: #2a4054; stroke-width: 1; }
+    .grid-line { stroke: #1b2c3b; stroke-width: 1; }
+    .axis-label { fill: #71879b; font-size: 9px; font-family: ui-sans-serif, sans-serif; }
+    .plot-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+    .plot-dot { stroke: var(--surface); stroke-width: 2; }
+    .chart-empty { fill: #71879b; font-size: 11px; font-family: ui-sans-serif, sans-serif; }
+    .log-card { margin-top: 12px; }
+    .log-head { padding-bottom: 12px; border-bottom: 1px solid var(--line-soft); }
+    pre { margin: 0; padding: 14px; max-height: 280px; overflow: auto; color: #b9c9d8; background: #07111a; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+
+    @media (max-width: 1100px) {
+      .overview { grid-template-columns: repeat(4, 1fr); }
+      .progress-card { grid-column: 1 / -1; }
+    }
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 24px, 1480px); padding-top: 20px; }
+      .topbar { display: block; }
+      .top-actions { justify-content: space-between; margin-top: 18px; }
+      .overview { grid-template-columns: 1fr 1fr; }
+      .metric { min-height: 126px; }
+      .context-row { align-items: flex-start; flex-direction: column; }
+      .panel-head { align-items: stretch; flex-direction: column; }
+      .filters { justify-content: stretch; }
+      .input-wrap { flex: 1; }
+      .detail-summary, .charts { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 480px) {
+      .overview { gap: 9px; }
+      .progress-card { padding: 18px; }
+      .metric { padding: 15px; }
+      .metric-value { font-size: 22px; }
+      .filters { flex-direction: column; align-items: stretch; }
+      select.control { width: 100%; }
+      .detail-summary, .charts { grid-template-columns: 1fr; }
+      .modal-content { padding: 14px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">S</div>
+        <div>
+          <div class="eyebrow">SCDP · Live monitor</div>
+          <h1>Full Benchmark</h1>
+          <p class="subtitle">Meta-World 50개 태스크의 학습과 평가 현황</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="live-box" id="connectionState" aria-live="polite">
+          <span class="live-dot" id="liveDot"></span>
+          <span id="connectionText">연결 중…</span>
+        </div>
+        <button class="button" id="refreshButton" type="button">
+          <span class="refresh-icon" aria-hidden="true">↻</span><span>새로고침</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="error-banner" id="errorBanner" role="status"><span aria-hidden="true">!</span><span id="errorMessage"></span></div>
+
+    <section class="overview" aria-label="벤치마크 요약">
+      <article class="card progress-card">
+        <div class="card-label">전체 학습 진행률</div>
+        <div class="progress-heading">
+          <strong class="progress-value" id="completionPct">—</strong>
+          <span class="progress-count" id="completionCount">— / 150 runs</span>
+        </div>
+        <div class="track" role="progressbar" aria-label="전체 학습 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="overallProgress"><div class="track-fill" id="overallProgressFill"></div></div>
+        <div class="progress-meta">
+          <span>정책 <b class="meta-key" id="policyValue">scdp</b></span>
+          <span>Epoch <b class="meta-key" id="epochValue">0–1000</b></span>
+          <span>평가 주기 <b class="meta-key" id="evalFreqValue">100</b></span>
+        </div>
+      </article>
+      <article class="card metric green">
+        <div class="metric-icon" aria-hidden="true">✓</div>
+        <div><div class="card-label">완료</div><div class="metric-value" id="completedValue">—</div><div class="metric-sub" id="completedTasksValue">태스크 —개</div></div>
+      </article>
+      <article class="card metric">
+        <div class="metric-icon" aria-hidden="true">▶</div>
+        <div><div class="card-label">진행 중</div><div class="metric-value" id="runningValue">—</div><div class="metric-sub" id="queuedValue">대기 —개</div></div>
+      </article>
+      <article class="card metric yellow">
+        <div class="metric-icon" aria-hidden="true">◎</div>
+        <div><div class="card-label">평가 완료</div><div class="metric-value" id="evaluatedValue">—</div><div class="metric-sub">성공률이 기록된 run</div></div>
+      </article>
+      <article class="card metric red">
+        <div class="metric-icon" aria-hidden="true">!</div>
+        <div><div class="card-label">오류 / 중단</div><div class="metric-value" id="problemValue">—</div><div class="metric-sub" id="problemDetail">오류 — · 중단 —</div></div>
+      </article>
+    </section>
+
+    <div class="context-row">
+      <div class="context-group">
+        <span class="launcher" id="launcherState"><i class="launcher-dot"></i><span id="launcherText">Launcher 확인 중</span></span>
+        <span id="outputRoot">출력 경로 —</span>
+      </div>
+      <span id="updatedAt">마지막 업데이트 —</span>
+    </div>
+
+    <section class="card panel" aria-labelledby="taskTitle">
+      <div class="panel-head">
+        <div class="panel-title-wrap">
+          <h2 class="panel-title" id="taskTitle">태스크별 성공률</h2>
+          <div class="panel-desc" id="resultCount">50개 태스크 · seed 0, 1, 2</div>
+        </div>
+        <div class="filters">
+          <label class="input-wrap">
+            <span class="search-icon" aria-hidden="true">⌕</span>
+            <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">태스크 검색</span>
+            <input class="control" id="searchInput" type="search" placeholder="태스크 이름 검색" autocomplete="off">
+          </label>
+          <label>
+            <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">상태 필터</span>
+            <select class="control" id="statusFilter">
+              <option value="all">전체 상태</option>
+              <option value="active">진행 중</option>
+              <option value="completed">완료</option>
+              <option value="evaluated">평가 기록 있음</option>
+              <option value="queued">대기</option>
+              <option value="problem">오류 / 중단</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <colgroup><col class="task"><col class="mean"><col class="seed"><col class="seed"><col class="seed"></colgroup>
+          <thead><tr><th scope="col">Task</th><th scope="col">태스크 평균</th><th scope="col">Seed 0</th><th scope="col">Seed 1</th><th scope="col">Seed 2</th></tr></thead>
+          <tbody id="taskRows"></tbody>
+        </table>
+      </div>
+      <div class="footnote">성공률은 각 run에서 평가된 체크포인트 중 최고값입니다. 평가 episode가 아직 0개인 경우는 ‘평가 대기’로 표시하며, 평가 결과가 실제 0인 경우는 0%로 표시합니다. 3개 seed가 모두 평가되기 전 태스크 평균은 잠정값입니다.</div>
+    </section>
+  </main>
+
+  <dialog id="runDialog" aria-labelledby="dialogTitle">
+    <div class="modal-inner">
+      <header class="modal-head">
+        <div><div class="modal-kicker">Run detail</div><h2 class="modal-title" id="dialogTitle">—</h2></div>
+        <button class="close" id="closeDialog" type="button" aria-label="상세 창 닫기">×</button>
+      </header>
+      <div class="modal-content" id="dialogContent"></div>
+    </div>
+  </dialog>
+
+  <script>
+    'use strict';
+
+    const REFRESH_MS = 5000;
+    const ACTIVE_STATUSES = new Set(['collecting', 'starting', 'training', 'evaluating', 'finalizing']);
+    const STATUS_LABELS = {
+      queued: '대기', collecting: '데이터 수집', starting: '시작 중', training: '학습 중',
+      evaluating: '평가 중', finalizing: '마무리', completed: '완료', failed: '오류', interrupted: '중단'
+    };
+
+    const els = Object.fromEntries([
+      'completionPct','completionCount','overallProgress','overallProgressFill','policyValue','epochValue','evalFreqValue',
+      'completedValue','completedTasksValue','runningValue','queuedValue','evaluatedValue','problemValue','problemDetail',
+      'launcherState','launcherText','outputRoot','updatedAt','connectionText','liveDot','refreshButton','errorBanner',
+      'errorMessage','searchInput','statusFilter','resultCount','taskRows','runDialog','dialogTitle','dialogContent','closeDialog'
+    ].map(id => [id, document.getElementById(id)]));
+
+    let snapshot = null;
+    let refreshTimer = null;
+    let refreshing = false;
+    let initialLoad = true;
+    let activeDetailKey = null;
+    let activeDetailTarget = null;
+    let detailController = null;
+
+    function finite(value) { return typeof value === 'number' && Number.isFinite(value); }
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, finite(value) ? value : min)); }
+    function pct(value, decimals = 0) { return finite(value) ? `${(value * 100).toFixed(decimals)}%` : '—'; }
+    function fmtInt(value) { return finite(value) ? Math.round(value).toLocaleString('ko-KR') : '—'; }
+    function displayTask(name) { return String(name || '이름 없는 태스크').replace(/[-_]/g, ' '); }
+    function cssEscape(value) { return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&'); }
+
+    function localTime(iso) {
+      if (!iso) return '—';
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return '—';
+      return new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date);
+    }
+
+    function relativeTime(iso) {
+      if (!iso) return '—';
+      const elapsed = Math.max(0, Date.now() - new Date(iso).getTime());
+      if (!Number.isFinite(elapsed)) return '—';
+      if (elapsed < 8000) return '방금 전';
+      if (elapsed < 60000) return `${Math.floor(elapsed / 1000)}초 전`;
+      if (elapsed < 3600000) return `${Math.floor(elapsed / 60000)}분 전`;
+      return localTime(iso);
+    }
+
+    function statusBadge(status) {
+      const safe = Object.hasOwn(STATUS_LABELS, status) ? status : 'queued';
+      return `<span class="status ${safe}"><i class="status-dot"></i>${STATUS_LABELS[safe]}</span>`;
+    }
+
+    function runCell(run, taskName, seed) {
+      const item = run || { task: taskName, seed, status: 'queued', progress_pct: 0, max_epoch: 1000 };
+      const status = Object.hasOwn(STATUS_LABELS, item.status) ? item.status : 'queued';
+      const progress = status === 'completed' ? 100 : clamp(item.progress_pct, 0, 100);
+      const success = finite(item.best_success)
+        ? `<span class="rate">${pct(item.best_success)}</span>`
+        : '<span class="rate pending">평가 대기</span>';
+      const maxEpoch = finite(item.max_epoch) ? item.max_epoch : 1000;
+      let stage = '시작 전';
+      if (status === 'collecting') stage = '데이터 수집 중';
+      if (status === 'starting') stage = '프로세스 시작 중';
+      if (finite(item.epoch)) stage = `ep ${fmtInt(item.epoch)} / ${fmtInt(maxEpoch)}`;
+      if (status === 'evaluating' && finite(item.eval_episodes_done) && finite(item.eval_episodes_total)) stage = `평가 ${fmtInt(item.eval_episodes_done)} / ${fmtInt(item.eval_episodes_total)}`;
+      if (status === 'finalizing') stage = '결과 정리 중';
+      if (item.early_stopped && status === 'completed') stage = `조기 종료 · ep ${fmtInt(item.epoch)}`;
+      return `<td><button class="seed-button" type="button" data-task="${escapeAttr(taskName)}" data-seed="${Number(seed)}" aria-label="${escapeAttr(displayTask(taskName))} seed ${seed} 상세 보기">
+        <span class="seed-top">${success}${statusBadge(status)}</span>
+        <span class="seed-bottom"><span class="mini-track"><span class="mini-fill" style="width:${progress.toFixed(1)}%"></span></span><span class="epoch">${stage}</span></span>
+      </button></td>`;
+    }
+
+    function escapeAttr(value) {
+      return String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function taskPassesFilter(task, query, filter) {
+      const rawName = String(task.task || '').toLocaleLowerCase();
+      const visibleName = displayTask(task.task).toLocaleLowerCase();
+      if (query && !rawName.includes(query) && !visibleName.includes(query)) return false;
+      const runs = Array.isArray(task.runs) ? task.runs : [];
+      if (filter === 'all') return true;
+      if (filter === 'active') return runs.some(run => ACTIVE_STATUSES.has(run.status));
+      if (filter === 'completed') return runs.length > 0 && runs.every(run => run.status === 'completed');
+      if (filter === 'evaluated') return runs.some(run => finite(run.best_success));
+      if (filter === 'queued') return runs.some(run => run.status === 'queued');
+      if (filter === 'problem') return runs.some(run => run.status === 'failed' || run.status === 'interrupted');
+      return true;
+    }
+
+    function renderTasks() {
+      if (!snapshot) return;
+      const query = els.searchInput.value.trim().toLocaleLowerCase();
+      const filter = els.statusFilter.value;
+      const seeds = Array.isArray(snapshot.seeds) && snapshot.seeds.length ? snapshot.seeds : [0, 1, 2];
+      document.querySelector('thead tr').innerHTML = '<th scope="col">Task</th><th scope="col">태스크 평균</th>' + seeds.map(seed => `<th scope="col">Seed ${Number(seed)}</th>`).join('');
+      document.querySelector('colgroup').innerHTML = '<col class="task"><col class="mean">' + seeds.map(() => '<col class="seed">').join('');
+      document.querySelector('.subtitle').textContent = `Meta-World ${(snapshot.tasks || []).length}개 태스크의 학습과 평가 현황`;
+      document.querySelector('.footnote').textContent = `성공률은 각 run에서 평가된 체크포인트 중 최고값입니다. ${seeds.length}개 seed가 모두 평가되기 전 태스크 평균은 잠정값으로 표시됩니다.`;
+      const tasks = (Array.isArray(snapshot.tasks) ? snapshot.tasks : []).filter(task => taskPassesFilter(task, query, filter));
+      els.resultCount.textContent = `${tasks.length}개 표시 · 전체 ${(snapshot.tasks || []).length}개 태스크`;
+      if (!tasks.length) {
+        els.taskRows.innerHTML = `<tr class="empty-row"><td colspan="${seeds.length + 2}"><span class="empty-symbol">⌕</span>조건에 맞는 태스크가 없습니다.</td></tr>`;
+        return;
+      }
+      els.taskRows.innerHTML = tasks.map(task => {
+        const runs = Array.isArray(task.runs) ? task.runs : [];
+        const bySeed = new Map(runs.map(run => [Number(run.seed), run]));
+        const evaluated = runs.filter(run => finite(run.best_success)).length;
+        const completed = finite(task.completed) ? task.completed : runs.filter(run => run.status === 'completed').length;
+        let mean = '<div class="mean-main waiting">평가 대기</div>';
+        if (finite(task.best_mean)) {
+          const standard = evaluated === seeds.length && finite(task.best_std) ? ` ± ${(task.best_std * 100).toFixed(1)}` : '';
+          mean = `<div class="mean-main">${(task.best_mean * 100).toFixed(1)}${standard}%</div>`;
+        }
+        const provisional = evaluated > 0 && evaluated < seeds.length ? ' · 잠정' : '';
+        return `<tr>
+          <td><div class="task-name">${escapeAttr(displayTask(task.task))}</div><div class="task-count">완료 ${completed}/${seeds.length}</div></td>
+          <td>${mean}<div class="mean-sub">평가 ${evaluated}/${seeds.length}${provisional}</div></td>
+          ${seeds.map(seed => runCell(bySeed.get(Number(seed)), task.task, seed)).join('')}
+        </tr>`;
+      }).join('');
+    }
+
+    function renderSummary(data) {
+      const summary = data.summary || {};
+      const completion = clamp(summary.completion_pct, 0, 100);
+      els.completionPct.textContent = `${completion.toFixed(1)}%`;
+      els.completionCount.textContent = `${fmtInt(summary.completed)} / ${fmtInt(summary.total)} runs`;
+      els.overallProgressFill.style.width = `${completion}%`;
+      els.overallProgress.setAttribute('aria-valuenow', completion.toFixed(1));
+      els.policyValue.textContent = data.policy || '—';
+      els.epochValue.textContent = `0–${Math.max(0, (Number(data.num_epochs) || 1001) - 1).toLocaleString('ko-KR')}`;
+      els.evalFreqValue.textContent = fmtInt(data.eval_freq);
+      els.completedValue.textContent = fmtInt(summary.completed);
+      els.completedTasksValue.textContent = `태스크 ${fmtInt(summary.completed_tasks)}개`;
+      els.runningValue.textContent = fmtInt(summary.running);
+      els.queuedValue.textContent = `대기 ${fmtInt(summary.queued)}개`;
+      els.evaluatedValue.textContent = fmtInt(summary.evaluated);
+      const problems = (Number(summary.failed) || 0) + (Number(summary.interrupted) || 0);
+      els.problemValue.textContent = fmtInt(problems);
+      els.problemDetail.textContent = `오류 ${fmtInt(summary.failed)} · 중단 ${fmtInt(summary.interrupted)}`;
+      const launcher = data.launcher || {};
+      els.launcherState.classList.toggle('active', Boolean(launcher.active));
+      const launcherName = launcher.name || 'Launcher';
+      els.launcherText.textContent = launcher.active ? `${launcherName} 실행 중 · ${fmtInt(launcher.slots)} slots` : `${launcherName} 비활성`;
+      els.outputRoot.textContent = `출력 경로 ${data.output_root || '—'}`;
+      els.outputRoot.title = data.output_root || '';
+      els.updatedAt.textContent = `마지막 업데이트 ${localTime(data.updated_at)} · ${relativeTime(data.updated_at)}`;
+    }
+
+    function setConnection(kind, message) {
+      els.liveDot.className = `live-dot ${kind || ''}`;
+      els.connectionText.textContent = message;
+    }
+
+    function showError(message) {
+      els.errorMessage.textContent = message;
+      els.errorBanner.classList.add('visible');
+      setConnection('error', '연결 오류');
+    }
+
+    function clearError() {
+      els.errorBanner.classList.remove('visible');
+      setConnection('active', 'Live · 5초 간격');
+    }
+
+    function loadingRows() {
+      els.taskRows.innerHTML = Array.from({ length: 7 }, () => `<tr>${Array.from({ length: 5 }, () => '<td><div class="skeleton"></div></td>').join('')}</tr>`).join('');
+    }
+
+    async function refreshStatus() {
+      if (refreshing) return;
+      refreshing = true;
+      els.refreshButton.disabled = true;
+      els.refreshButton.classList.add('is-loading');
+      try {
+        const response = await fetch('/api/status', { cache: 'no-store', headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!data || !Array.isArray(data.tasks)) throw new Error('응답 형식이 올바르지 않습니다.');
+        snapshot = data;
+        renderSummary(data);
+        renderTasks();
+        clearError();
+        if (activeDetailTarget) refreshDetail(true);
+        initialLoad = false;
+      } catch (error) {
+        if (initialLoad) {
+          els.taskRows.innerHTML = '<tr class="empty-row"><td colspan="5"><span class="empty-symbol">!</span>상태 데이터를 불러오지 못했습니다. 잠시 후 다시 시도합니다.</td></tr>';
+        }
+        showError(`서버 상태를 가져오지 못했습니다 (${error.message}). 마지막으로 받은 데이터는 그대로 유지합니다.`);
+      } finally {
+        refreshing = false;
+        els.refreshButton.disabled = false;
+        els.refreshButton.classList.remove('is-loading');
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(refreshStatus, REFRESH_MS);
+      }
+    }
+
+    function chartSvg(points, options) {
+      const width = 420, height = 190;
+      const pad = { left: 41, right: 14, top: 18, bottom: 28 };
+      const innerW = width - pad.left - pad.right, innerH = height - pad.top - pad.bottom;
+      const valid = points.filter(point => finite(point.x) && finite(point.y));
+      if (!valid.length) return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${options.empty}"><text class="chart-empty" x="50%" y="50%" text-anchor="middle">${options.empty}</text></svg>`;
+      const xMin = Math.min(...valid.map(p => p.x));
+      const xMaxRaw = Math.max(...valid.map(p => p.x));
+      const xMax = xMaxRaw === xMin ? xMin + 1 : xMaxRaw;
+      const yMin = finite(options.yMin) ? options.yMin : Math.min(...valid.map(p => p.y));
+      const yMaxRaw = finite(options.yMax) ? options.yMax : Math.max(...valid.map(p => p.y));
+      const yMax = yMaxRaw === yMin ? yMin + 1 : yMaxRaw;
+      const sx = x => pad.left + ((x - xMin) / (xMax - xMin)) * innerW;
+      const sy = y => pad.top + innerH - ((y - yMin) / (yMax - yMin)) * innerH;
+      const line = valid.map((p, index) => `${index ? 'L' : 'M'} ${sx(p.x).toFixed(2)} ${sy(p.y).toFixed(2)}`).join(' ');
+      const grid = [0, .25, .5, .75, 1].map(f => {
+        const y = pad.top + innerH * f;
+        const value = yMax - (yMax - yMin) * f;
+        return `<line class="grid-line" x1="${pad.left}" x2="${width-pad.right}" y1="${y}" y2="${y}"/><text class="axis-label" x="${pad.left-7}" y="${y+3}" text-anchor="end">${options.yFormat(value)}</text>`;
+      }).join('');
+      const xLabels = [0, .5, 1].map(f => {
+        const x = pad.left + innerW * f;
+        const value = xMin + (xMax - xMin) * f;
+        return `<text class="axis-label" x="${x}" y="${height-8}" text-anchor="middle">${Math.round(value).toLocaleString('ko-KR')}</text>`;
+      }).join('');
+      const dots = valid.length <= 24 ? valid.map(p => `<circle class="plot-dot" cx="${sx(p.x)}" cy="${sy(p.y)}" r="3" fill="${options.color}"><title>epoch ${p.x}: ${options.tooltip(p.y)}</title></circle>`).join('') : '';
+      return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${options.label}">${grid}<line class="axis" x1="${pad.left}" x2="${width-pad.right}" y1="${pad.top+innerH}" y2="${pad.top+innerH}"/>${xLabels}<path class="plot-line" stroke="${options.color}" d="${line}"/>${dots}</svg>`;
+    }
+
+    function downsample(points, maxPoints = 220) {
+      if (points.length <= maxPoints) return points;
+      const result = [];
+      const stride = (points.length - 1) / (maxPoints - 1);
+      for (let index = 0; index < maxPoints; index++) result.push(points[Math.round(index * stride)]);
+      return result;
+    }
+
+    function renderDetail(run, preserveScroll = false) {
+      const modalScroller = els.runDialog.querySelector('.modal-inner');
+      const priorModalScroll = preserveScroll && modalScroller ? modalScroller.scrollTop : 0;
+      const priorLog = preserveScroll ? document.getElementById('logTail') : null;
+      const priorLogScroll = priorLog ? { top: priorLog.scrollTop, left: priorLog.scrollLeft } : null;
+      const evaluations = Array.isArray(run.evaluations) ? run.evaluations : [];
+      const lossHistory = downsample(Array.isArray(run.loss_history) ? run.loss_history : []);
+      const evalPoints = evaluations.map(item => ({ x: Number(item.epoch), y: Number(item.success_rate) }));
+      const lossPoints = lossHistory.map(item => ({ x: finite(item.epoch) ? item.epoch : Number(item.step), y: Number(item.loss) }));
+      const maxEpoch = finite(run.max_epoch) ? run.max_epoch : 1000;
+      const progress = run.status === 'completed' ? 100 : clamp(run.progress_pct, 0, 100);
+      let stage = finite(run.epoch) ? `${fmtInt(run.epoch)} / ${fmtInt(maxEpoch)}` : '시작 전';
+      if (run.status === 'collecting') stage = '데이터 수집 중';
+      if (run.status === 'starting') stage = '프로세스 시작 중';
+      if (run.status === 'evaluating' && finite(run.eval_episodes_done) && finite(run.eval_episodes_total)) stage = `평가 ${fmtInt(run.eval_episodes_done)} / ${fmtInt(run.eval_episodes_total)} episodes`;
+      if (run.status === 'finalizing') stage = '결과 정리 중';
+      const updated = run.updated_at ? `${localTime(run.updated_at)} · ${relativeTime(run.updated_at)}` : '—';
+      const exitNote = finite(run.exit_code) ? ` · exit ${run.exit_code}` : '';
+      els.dialogContent.innerHTML = `
+        <div class="detail-summary">
+          <div class="detail-stat"><div class="detail-label">상태</div><div class="detail-value">${statusBadge(run.status)}${run.early_stopped ? ' <span class="chart-note">조기 종료</span>' : ''}</div></div>
+          <div class="detail-stat"><div class="detail-label">진행 Epoch</div><div class="detail-value">${stage}</div></div>
+          <div class="detail-stat"><div class="detail-label">최고 평가 성공률</div><div class="detail-value">${finite(run.best_success) ? pct(run.best_success, 1) : '평가 대기'}</div></div>
+          <div class="detail-stat"><div class="detail-label">최근 평가 성공률</div><div class="detail-value">${finite(run.latest_success) ? pct(run.latest_success, 1) : '평가 대기'}</div></div>
+          <div class="detail-stat"><div class="detail-label">진행률</div><div class="detail-value">${progress.toFixed(1)}%</div></div>
+          <div class="detail-stat"><div class="detail-label">평가 Episodes</div><div class="detail-value">${finite(run.eval_episodes_done) && finite(run.eval_episodes_total) ? `${fmtInt(run.eval_episodes_done)} / ${fmtInt(run.eval_episodes_total)}` : '—'}</div></div>
+          <div class="detail-stat"><div class="detail-label">최근 Loss</div><div class="detail-value">${finite(run.loss) ? run.loss.toFixed(5) : '—'}</div></div>
+          <div class="detail-stat"><div class="detail-label">Device</div><div class="detail-value">${escapeAttr(run.device || '—')}</div></div>
+          <div class="detail-stat"><div class="detail-label">업데이트</div><div class="detail-value" style="font-size:13px">${updated}${exitNote}</div></div>
+        </div>
+        <div class="charts">
+          <section class="chart-card"><div class="chart-head"><span class="chart-title">평가 성공률</span><span class="chart-note">평가 checkpoint 기준</span></div>${chartSvg(evalPoints, { label: '평가 성공률 추이', empty: '아직 평가 기록이 없습니다', yMin: 0, yMax: 1, color: '#51dd9b', yFormat: value => `${Math.round(value*100)}%`, tooltip: value => pct(value, 1) })}</section>
+          <section class="chart-card"><div class="chart-head"><span class="chart-title">Training loss</span><span class="chart-note">최대 220 points</span></div>${chartSvg(lossPoints, { label: '학습 loss 추이', empty: '아직 loss 기록이 없습니다', color: '#36d4e8', yFormat: value => Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2), tooltip: value => value.toFixed(5) })}</section>
+        </div>
+        <section class="log-card"><div class="log-head"><span class="log-title">최근 로그</span><span class="chart-note">log tail</span></div><pre id="logTail"></pre></section>`;
+      const logTail = document.getElementById('logTail');
+      logTail.textContent = run.log_tail || '로그가 아직 없습니다.';
+      if (preserveScroll) {
+        if (modalScroller) modalScroller.scrollTop = priorModalScroll;
+        if (priorLogScroll) {
+          logTail.scrollTop = priorLogScroll.top;
+          logTail.scrollLeft = priorLogScroll.left;
+        }
+      }
+    }
+
+    async function refreshDetail(background = false) {
+      if (!activeDetailTarget || detailController) return;
+      const { task, seed } = activeDetailTarget;
+      const requestKey = `${task}:${seed}`;
+      const controller = new AbortController();
+      detailController = controller;
+      try {
+        const response = await fetch(`/api/run?task=${encodeURIComponent(task)}&seed=${encodeURIComponent(seed)}`, { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const run = await response.json();
+        if (activeDetailKey !== requestKey || !els.runDialog.open) return;
+        renderDetail(run, background);
+      } catch (error) {
+        if (error.name === 'AbortError' || activeDetailKey !== requestKey || !els.runDialog.open) return;
+        if (!background) els.dialogContent.innerHTML = `<div class="modal-state">상세 정보를 불러오지 못했습니다.<br><small>${escapeAttr(error.message)}</small></div>`;
+      } finally {
+        if (detailController === controller) detailController = null;
+      }
+    }
+
+    function openDetail(task, seed) {
+      if (detailController) detailController.abort();
+      detailController = null;
+      activeDetailKey = `${task}:${seed}`;
+      activeDetailTarget = { task, seed };
+      els.dialogTitle.textContent = `${displayTask(task)} · seed ${seed}`;
+      els.dialogContent.innerHTML = '<div class="modal-state">Run 상세 정보를 불러오는 중…</div>';
+      if (!els.runDialog.open) els.runDialog.showModal();
+      refreshDetail(false);
+    }
+
+    els.refreshButton.addEventListener('click', () => { clearTimeout(refreshTimer); refreshStatus(); });
+    els.searchInput.addEventListener('input', renderTasks);
+    els.statusFilter.addEventListener('change', renderTasks);
+    els.taskRows.addEventListener('click', event => {
+      const button = event.target.closest('.seed-button');
+      if (button) openDetail(button.dataset.task, Number(button.dataset.seed), button);
+    });
+    els.closeDialog.addEventListener('click', () => els.runDialog.close());
+    els.runDialog.addEventListener('click', event => {
+      const rect = els.runDialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) els.runDialog.close();
+    });
+    els.runDialog.addEventListener('close', () => {
+      if (detailController) detailController.abort();
+      detailController = null;
+      activeDetailKey = null;
+      activeDetailTarget = null;
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { clearTimeout(refreshTimer); refreshStatus(); }
+    });
+
+    loadingRows();
+    refreshStatus();
+    setInterval(() => {
+      if (snapshot) els.updatedAt.textContent = `마지막 업데이트 ${localTime(snapshot.updated_at)} · ${relativeTime(snapshot.updated_at)}`;
+    }, 10000);
+  </script>
+</body>
+</html>
