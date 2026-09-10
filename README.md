@@ -1,11 +1,28 @@
-# SCDP
+<h1 align="center">SCDP</h1>
 
-Official implementation of **Spatially Conditioned Diffusion Policy (SCDP)**,
-accepted at **CoRL 2026**.
+<p align="center">
+  <strong>Spatially Conditioned Diffusion Policy</strong><br>
+  Learning Precise and Robust Manipulation with a Single RGB Camera
+</p>
 
-This repository is a focused fork of [LeRobot](https://github.com/huggingface/lerobot)
-0.4.1. It provides SCDP and Diffusion Policy baselines for Meta-World, together with
-real-world training and inference utilities.
+<p align="center">
+  Seoyoon Kim · Kanghyun Kim · Dongwoo Ko · Yeong Jin Heo · Min Jun Kim
+</p>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2606.14535"><img src="https://img.shields.io/badge/arXiv-2606.14535-b31b1b" alt="arXiv:2606.14535"></a>
+  <img src="https://img.shields.io/badge/CoRL-2026-2563eb" alt="Accepted at CoRL 2026">
+</p>
+
+<p align="center">
+  <a href="#setup">Setup</a> ·
+  <a href="#meta-world">Meta-World</a> ·
+  <a href="#real-world">Real world</a> ·
+  <a href="#citation">Citation</a>
+</p>
+
+Official implementation of SCDP, with Meta-World benchmarks and real-world training
+and inference. Built on [LeRobot](https://github.com/huggingface/lerobot) 0.4.1.
 
 ## Setup
 
@@ -18,23 +35,13 @@ cd SCDP
 uv sync --locked
 ```
 
-For headless Meta-World runs:
-
-```bash
-export MUJOCO_GL=egl
-```
-
-## Entry points
-
-| Environment | Policy | Train | Evaluate / infer |
-| --- | --- | --- | --- |
-| Meta-World | SCDP | `scripts/metaworld_ours_dp_train.py` | `scripts/metaworld_ours_dp_eval.py` |
-| Meta-World | Diffusion Policy | `scripts/metaworld_dp_train.py` | `scripts/metaworld_dp_eval.py` |
-| Real world | SCDP | `scripts/real_ours_dp_train.py` | `scripts/real_policy_inference.py --policy scdp` |
+For headless Meta-World runs, set `export MUJOCO_GL=egl`.
 
 ## Meta-World
 
-Collect successful expert demonstrations in LeRobot v3 format:
+### 1. Collect demonstrations
+
+Collect 20 successful expert episodes in LeRobot v3 format:
 
 ```bash
 uv run python scripts/collect_metaworld.py \
@@ -43,28 +50,32 @@ uv run python scripts/collect_metaworld.py \
   --seed 0
 ```
 
-Train the baseline and SCDP:
+### 2. Train
 
 ```bash
+# Diffusion Policy baseline
 uv run python scripts/metaworld_dp_train.py \
   --task-name assembly \
   --seed 0
 
+# SCDP
 uv run python scripts/metaworld_ours_dp_train.py \
   --task-name assembly \
   --seed 0 \
   --sample-step 8
 ```
 
-Evaluate the final checkpoints:
+### 3. Evaluate
 
 ```bash
+# Diffusion Policy baseline
 uv run python scripts/metaworld_dp_eval.py \
   --task-name assembly \
   --checkpoint outputs/assembly/dp/seed_0/checkpoints/final \
   --episodes 20 \
   --seed 0
 
+# SCDP
 uv run python scripts/metaworld_ours_dp_eval.py \
   --task-name assembly \
   --checkpoint outputs/assembly/scdp/seed_0/checkpoints/final \
@@ -75,7 +86,8 @@ uv run python scripts/metaworld_ours_dp_eval.py \
 Use `--video-dir outputs/eval-videos` to save rollouts. By default, training writes
 checkpoints and metrics under `outputs/<task>/{dp,scdp}/seed_<seed>`.
 
-### Default configuration
+<details>
+<summary>Default configuration</summary>
 
 | Setting | Value |
 | --- | --- |
@@ -88,6 +100,8 @@ checkpoints and metrics under `outputs/<task>/{dp,scdp}/seed_<seed>`.
 | Noise scheduler / inference steps | DDIM / 16 |
 | SCDP sample step | 8 |
 | Epoch indices / evaluation epochs | `0-1000` / `100, 200, ..., 1000` |
+
+</details>
 
 ### Full benchmark
 
@@ -104,8 +118,8 @@ three-seed mean and sample standard deviation, then writes `summary.csv` and
 `summary.json` under `outputs/metaworld_benchmark`. Completed runs are skipped;
 use `--summarize-only` to aggregate existing metrics without training.
 
-To monitor benchmark progress and results, run `python3 scripts/benchmark_dashboard.py`
-in a separate terminal and open <http://127.0.0.1:8080>.
+**Dashboard:** Run `python3 scripts/benchmark_dashboard.py` in a separate terminal
+and open <http://127.0.0.1:8080> to monitor progress and results.
 
 ## Real world
 
@@ -140,7 +154,10 @@ uv run python scripts/real_policy_inference.py \
 
 Inference returns actions in dataset units; robot control must be integrated separately.
 
-## Notes
+<details>
+<summary>Development and implementation notes</summary>
+
+### Notes
 
 - New checkpoints include normalization statistics; real-world SCDP checkpoints also
   include camera calibration.
@@ -151,7 +168,7 @@ Inference returns actions in dataset units; robot control must be integrated sep
   three-seed best-checkpoint aggregates; checkpoint curves and fresh-process rollout
   estimates need not be bitwise identical.
 
-## Validation
+### Validation
 
 ```bash
 uv sync --locked --extra dev
@@ -162,7 +179,26 @@ uv build
 
 Full training and evaluation require suitable data and a CUDA GPU.
 
+</details>
+
 ## License
 
-This repository is based on LeRobot 0.4.1. See `NOTICE` for attribution and `LICENSE`
-for the Apache License 2.0.
+Released under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for LeRobot attribution.
+
+## Citation
+
+If you use SCDP in your research, please cite our [paper](https://arxiv.org/abs/2606.14535):
+
+```bibtex
+@misc{kim2026scdp,
+  title         = {Spatially Conditioned Diffusion Policy: Learning Precise and
+                   Robust Manipulation with a Single {RGB} Camera},
+  author        = {Seoyoon Kim and Kanghyun Kim and Dongwoo Ko and
+                   Yeong Jin Heo and Min Jun Kim},
+  year          = {2026},
+  eprint        = {2606.14535},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.RO},
+  url           = {https://arxiv.org/abs/2606.14535}
+}
+```
