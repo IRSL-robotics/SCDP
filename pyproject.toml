@@ -3,7 +3,7 @@ requires = ["setuptools>=71,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lerobot-scdp"
+name = "SCDP"
 version = "0.1.0"
 description = "Official SCDP implementation for Meta-World and real-world experiments"
 readme = "README.md"

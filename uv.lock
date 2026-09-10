@@ -575,70 +575,6 @@ wheels = [
 ]
 
 [[package]]
-name = "lerobot-scdp"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "accelerate" },
-    { name = "av" },
-    { name = "datasets" },
-    { name = "diffusers" },
-    { name = "draccus" },
-    { name = "einops" },
-    { name = "gymnasium" },
-    { name = "huggingface-hub", extra = ["hf-transfer"] },
-    { name = "imageio", extra = ["ffmpeg"] },
-    { name = "metaworld" },
-    { name = "mujoco" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "pyarrow" },
-    { name = "safetensors" },
-    { name = "torch" },
-    { name = "torchcodec" },
-    { name = "torchvision" },
-    { name = "tqdm" },
-    { name = "wandb" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = "==1.11.0" },
-    { name = "av", specifier = "==15.1.0" },
-    { name = "datasets", specifier = "==4.1.1" },
-    { name = "diffusers", specifier = "==0.35.2" },
-    { name = "draccus", specifier = "==0.10.0" },
-    { name = "einops", specifier = "==0.8.1" },
-    { name = "gymnasium", specifier = "==1.2.1" },
-    { name = "huggingface-hub", extras = ["hf-transfer"], specifier = "==0.35.3" },
-    { name = "imageio", extras = ["ffmpeg"], specifier = "==2.37.0" },
-    { name = "metaworld", specifier = "==3.0.0" },
-    { name = "mujoco", specifier = "==3.3.7" },
-    { name = "numpy", specifier = "==2.2.6" },
-    { name = "packaging", specifier = "==25.0" },
-    { name = "pandas", specifier = "==2.3.3" },
-    { name = "pillow", specifier = "==12.0.0" },
-    { name = "pyarrow", specifier = "==22.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4,<9" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<0.14" },
-    { name = "safetensors", specifier = "==0.6.2" },
-    { name = "torch", specifier = "==2.9.1" },
-    { name = "torchcodec", specifier = "==0.9.1" },
-    { name = "torchvision", specifier = "==0.24.1" },
-    { name = "tqdm", specifier = "==4.67.1" },
-    { name = "wandb", specifier = "==0.21.4" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "markupsafe"
 version = "3.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1283,6 +1219,70 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/59/a7/e2158e17bbe57d104f0abbd95dff60dda916cf277c9f9663b4bf9bad8b6e/safetensors-0.6.2-cp38-abi3-win32.whl", hash = "sha256:cab75ca7c064d3911411461151cb69380c9225798a20e712b102edda2542ddb1", size = 308926, upload-time = "2025-08-08T13:14:01.095Z" },
     { url = "https://files.pythonhosted.org/packages/2c/c3/c0be1135726618dc1e28d181b8c442403d8dbb9e273fd791de2d4384bcdd/safetensors-0.6.2-cp38-abi3-win_amd64.whl", hash = "sha256:c7b214870df923cbc1593c3faee16bec59ea462758699bd3fee399d00aac072c", size = 320192, upload-time = "2025-08-08T13:13:59.467Z" },
 ]
+
+[[package]]
+name = "scdp"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "accelerate" },
+    { name = "av" },
+    { name = "datasets" },
+    { name = "diffusers" },
+    { name = "draccus" },
+    { name = "einops" },
+    { name = "gymnasium" },
+    { name = "huggingface-hub", extra = ["hf-transfer"] },
+    { name = "imageio", extra = ["ffmpeg"] },
+    { name = "metaworld" },
+    { name = "mujoco" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "pyarrow" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "torchcodec" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+    { name = "wandb" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "accelerate", specifier = "==1.11.0" },
+    { name = "av", specifier = "==15.1.0" },
+    { name = "datasets", specifier = "==4.1.1" },
+    { name = "diffusers", specifier = "==0.35.2" },
+    { name = "draccus", specifier = "==0.10.0" },
+    { name = "einops", specifier = "==0.8.1" },
+    { name = "gymnasium", specifier = "==1.2.1" },
+    { name = "huggingface-hub", extras = ["hf-transfer"], specifier = "==0.35.3" },
+    { name = "imageio", extras = ["ffmpeg"], specifier = "==2.37.0" },
+    { name = "metaworld", specifier = "==3.0.0" },
+    { name = "mujoco", specifier = "==3.3.7" },
+    { name = "numpy", specifier = "==2.2.6" },
+    { name = "packaging", specifier = "==25.0" },
+    { name = "pandas", specifier = "==2.3.3" },
+    { name = "pillow", specifier = "==12.0.0" },
+    { name = "pyarrow", specifier = "==22.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4,<9" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<0.14" },
+    { name = "safetensors", specifier = "==0.6.2" },
+    { name = "torch", specifier = "==2.9.1" },
+    { name = "torchcodec", specifier = "==0.9.1" },
+    { name = "torchvision", specifier = "==0.24.1" },
+    { name = "tqdm", specifier = "==4.67.1" },
+    { name = "wandb", specifier = "==0.21.4" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "scipy"
